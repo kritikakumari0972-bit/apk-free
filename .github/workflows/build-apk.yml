@@ -1,0 +1,198 @@
+name: Build NovaBoost Android APK
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build variant to package'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build & Package NovaBoost APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Configure Android SDK & Accept Licenses
+        run: |
+          echo "=== Setting up Android SDK Environment ==="
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+
+          # Locate sdkmanager
+          SDKMANAGER=""
+          if [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          elif command -v sdkmanager &> /dev/null; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          elif [ -x "$ANDROID_HOME/tools/bin/sdkmanager" ]; then
+            SDKMANAGER="$ANDROID_HOME/tools/bin/sdkmanager"
+          fi
+
+          if [ -n "$SDKMANAGER" ]; then
+            echo "Found sdkmanager at: $SDKMANAGER"
+            echo "Accepting all Android SDK licenses..."
+            yes | "$SDKMANAGER" --licenses || true
+
+            echo "Ensuring Android SDK Platform 36 and Build-Tools are installed..."
+            "$SDKMANAGER" --install "platforms;android-36" "platforms;android-36.1" "build-tools;36.0.0" "platform-tools" || true
+            yes | "$SDKMANAGER" --licenses || true
+          else
+            echo "Warning: sdkmanager not found, relying on Gradle auto-download."
+          fi
+
+      - name: Normalize Line Endings and Permissions
+        run: |
+          echo "=== Fixing line endings and permissions ==="
+          sed -i 's/\r$//' ./gradlew || true
+          chmod +x ./gradlew
+
+      - name: Prepare Signing Keys and Environment Files
+        run: |
+          echo "=== Setting up Keystore and Environment ==="
+          
+          # Restore debug keystore from base64 if present
+          if [ -f "debug.keystore.base64" ]; then
+            tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore 2>/dev/null || true
+            echo "Extracted debug.keystore from base64."
+          fi
+
+          # If debug.keystore does not exist or is empty, generate a 100% valid debug keystore
+          if [ ! -s "debug.keystore" ]; then
+            echo "Generating fresh standard debug.keystore..."
+            rm -f debug.keystore
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "Generated debug.keystore successfully."
+          fi
+
+          # Ensure .env and secrets file exists for Secrets Gradle Plugin
+          if [ ! -f ".env" ]; then
+            if [ -f ".env.example" ]; then
+              cp .env.example .env
+              echo "Copied .env from .env.example"
+            else
+              echo "GEMINI_API_KEY=" > .env
+              echo "Created placeholder .env"
+            fi
+          fi
+          touch secrets.properties
+
+      - name: Build Debug APK (assembleDebug)
+        run: |
+          echo "=== Assembling Debug APK ==="
+          ./gradlew :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --no-configuration-cache \
+            -Dorg.gradle.workers.max=2 \
+            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"
+
+      - name: Optional - Run Unit Tests (Non-blocking)
+        continue-on-error: true
+        run: |
+          echo "=== Running Unit Tests ==="
+          ./gradlew :app:testDebugUnitTest \
+            --no-daemon \
+            --no-configuration-cache \
+            -Dorg.gradle.workers.max=2 || true
+
+      - name: Package APK Artifacts
+        run: |
+          echo "=== Packaging APK Artifacts ==="
+          mkdir -p build-artifacts
+          
+          echo "Searching for generated APKs in app/build/outputs/..."
+          find app/build/outputs -name "*.apk" -ls
+          
+          # Copy debug APK
+          if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+            cp "app/build/outputs/apk/debug/app-debug.apk" "build-artifacts/NovaBoost-debug.apk"
+          else
+            # Grab any apk found
+            APK_FOUND=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+            if [ -n "$APK_FOUND" ]; then
+              cp "$APK_FOUND" "build-artifacts/NovaBoost-debug.apk"
+            fi
+          fi
+
+          # Verify that APK was created and has non-zero size
+          if [ -f "build-artifacts/NovaBoost-debug.apk" ]; then
+            APK_SIZE=$(ls -lh "build-artifacts/NovaBoost-debug.apk" | awk '{print $5}')
+            echo "NovaBoost APK packaged successfully! Size: $APK_SIZE"
+            sha256sum "build-artifacts/NovaBoost-debug.apk" > "build-artifacts/SHA256SUMS.txt"
+            cat "build-artifacts/SHA256SUMS.txt"
+          else
+            echo "ERROR: No APK found after assembleDebug!"
+            exit 1
+          fi
+
+      - name: Upload NovaBoost APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NovaBoost-debug-apk
+          path: build-artifacts/*
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Output Job Summary
+        run: |
+          APK_SIZE=$(ls -lh build-artifacts/NovaBoost-debug.apk | awk '{print $5}')
+          echo "### 🚀 NovaBoost APK Build Succeeded!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **App Name** | NovaBoost — Ultimate Android Optimizer |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Variant** | Debug (Pre-signed, Ready to Install) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target SDK** | Android 16 (API 36) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Minimum SDK** | Android 7.0+ (API 24+) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **APK Size** | $APK_SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### 📥 How to Download & Install:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Scroll down to the **Artifacts** section of this GitHub Actions run." >> $GITHUB_STEP_SUMMARY
+          echo "2. Download \`NovaBoost-debug-apk\` (a zip file containing \`NovaBoost-debug.apk\`)." >> $GITHUB_STEP_SUMMARY
+          echo "3. Extract the ZIP on your phone or PC and transfer \`NovaBoost-debug.apk\` to your Android device." >> $GITHUB_STEP_SUMMARY
+          echo "4. Tap the APK file to install (enable *'Install unknown apps'* for your file manager if prompted)." >> $GITHUB_STEP_SUMMARY
+          echo "5. Open **NovaBoost** and enjoy 100% real optimization, diagnostics, and gaming tools!" >> $GITHUB_STEP_SUMMARY

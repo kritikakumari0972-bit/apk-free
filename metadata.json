@@ -1,0 +1,6 @@
+{
+  "name": "NovaBoost",
+  "description": "Ultimate Android Optimizer, Virtual Memory Diagnostics, Gaming Center & Smart Cleaner",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
