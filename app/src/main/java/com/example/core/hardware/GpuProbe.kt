@@ -20,7 +20,9 @@ data class GpuDiagnostics(
     val extensionCount: Int,
     val topExtensions: List<String>,
     val astcSupported: Boolean,
-    val etc2Supported: Boolean
+    val etc2Supported: Boolean,
+    val realTimeLoadSupported: Boolean = false,
+    val realTimeLoadStatus: String = "REAL-TIME GPU UTILIZATION UNAVAILABLE (Driver telemetry restricted)"
 )
 
 object GpuProbe {
@@ -30,9 +32,9 @@ object GpuProbe {
     fun probeGpu(context: Context): GpuDiagnostics {
         cachedGpuInfo?.let { return it }
 
-        var renderer = "Generic Android GPU"
+        var renderer = "OpenGL ES (Querying hardware...)"
         var vendor = "System Graphics"
-        var version = "OpenGL ES 2.0+"
+        var version = "OpenGL ES"
         var maxTexture = 2048
         var extensionCount = 0
         val topExts = mutableListOf<String>()
@@ -91,7 +93,7 @@ object GpuProbe {
                 }
             }
         } catch (_: Throwable) {
-            // Safe fallback if offscreen context creation has platform restrictions
+            renderer = "OpenGL ES (Driver probe restricted)"
         }
 
         // Check Vulkan Hardware Support
@@ -122,7 +124,9 @@ object GpuProbe {
             extensionCount = extensionCount,
             topExtensions = topExts,
             astcSupported = astc,
-            etc2Supported = etc2
+            etc2Supported = etc2,
+            realTimeLoadSupported = false,
+            realTimeLoadStatus = "REAL-TIME GPU UTILIZATION UNAVAILABLE (No driver telemetry exposed)"
         )
         cachedGpuInfo = result
         return result

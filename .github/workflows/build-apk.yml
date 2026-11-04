@@ -130,14 +130,13 @@ jobs:
             -Dorg.gradle.workers.max=2 \
             -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"
 
-      - name: Optional - Run Unit Tests (Non-blocking)
-        continue-on-error: true
+      - name: Run Unit Tests
         run: |
           echo "=== Running Unit Tests ==="
           ./gradlew :app:testDebugUnitTest \
             --no-daemon \
             --no-configuration-cache \
-            -Dorg.gradle.workers.max=2 || true
+            -Dorg.gradle.workers.max=2
 
       - name: Package APK Artifacts
         run: |

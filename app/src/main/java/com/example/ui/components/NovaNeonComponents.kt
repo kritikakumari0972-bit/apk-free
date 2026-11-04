@@ -154,10 +154,13 @@ fun NeonActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isPurple: Boolean = false,
+    enabled: Boolean = true,
     icon: ImageVector? = null,
     testTag: String = "action_button"
 ) {
-    val brush = if (isPurple) {
+    val brush = if (!enabled) {
+        Brush.horizontalGradient(listOf(Color(0xFF1E2838), Color(0xFF151D2A)))
+    } else if (isPurple) {
         Brush.horizontalGradient(listOf(NovaPurpleGradientStart, NovaPurpleGradientEnd))
     } else {
         Brush.horizontalGradient(listOf(NovaButtonGradientStart, NovaButtonGradientEnd))
@@ -169,18 +172,18 @@ fun NeonActionButton(
             .height(48.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(brush)
-            .clickable { onClick() }
+            .clickable(enabled = enabled) { onClick() }
             .testTag(testTag),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
-                Icon(imageVector = icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                Icon(imageVector = icon, contentDescription = null, tint = if (enabled) Color.White else NovaTextGray, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(6.dp))
             }
             Text(
                 text = text,
-                color = Color.White,
+                color = if (enabled) Color.White else NovaTextGray,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp

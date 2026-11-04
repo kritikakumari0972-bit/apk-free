@@ -45,4 +45,19 @@ object FormatUtils {
             String.format(Locale.US, "%.0f MHz", mhz)
         }
     }
+
+    /**
+     * Formats duration in seconds into MM:SS or HH:MM:SS
+     */
+    fun formatDurationSeconds(seconds: Long): String {
+        if (seconds <= 0L) return "00:00"
+        val hrs = seconds / 3600
+        val mins = (seconds % 3600) / 60
+        val secs = seconds % 60
+        return if (hrs > 0) {
+            String.format(Locale.US, "%02d:%02d:%02d", hrs, mins, secs)
+        } else {
+            String.format(Locale.US, "%02d:%02d", mins, secs)
+        }
+    }
 }

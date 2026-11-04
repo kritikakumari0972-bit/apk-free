@@ -21,14 +21,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Thermostat
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,8 +83,8 @@ fun CpuGpuScreen(
         // Top Bar
         NeonTopBar(
             icon = Icons.Default.Memory,
-            title = "CPU & GPU",
-            subtitle = "",
+            title = "CPU & GPU Telemetry",
+            subtitle = "Direct silicon hardware diagnostics",
             rightIcon = Icons.Default.Menu,
             onRightClick = { onBack() }
         )
@@ -110,7 +111,7 @@ fun CpuGpuScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "CPU",
+                    text = "CPU Telemetry",
                     color = Color.White,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
@@ -126,7 +127,7 @@ fun CpuGpuScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "GPU",
+                    text = "GPU Hardware",
                     color = if (selectedTab == "GPU") Color.White else NovaTextGray,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
@@ -136,99 +137,99 @@ fun CpuGpuScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
 
-        // CPU Card with Waveform
-        NeonCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Cyber CPU Icon Badge
-                Box(
-                    modifier = Modifier
-                        .size(54.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(NovaNeonCyan.copy(alpha = 0.15f))
-                        .border(1.5.dp, NovaNeonCyan, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
+        if (selectedTab == "CPU") {
+            // CPU Card with Waveform
+            NeonCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = "CPU", color = NovaNeonCyan, fontSize = 13.sp, fontWeight = FontWeight.Black)
-                }
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(NovaNeonCyan.copy(alpha = 0.15f))
+                            .border(1.5.dp, NovaNeonCyan, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = "CPU", color = NovaNeonCyan, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                    }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(14.dp))
 
-                Column {
-                    Text(text = "CPU", color = NovaTextGray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Column {
+                        Text(text = "Processor Architecture", color = NovaTextGray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         Text(
-                            text = "${cpu.cpuUsagePercent}%",
+                            text = if (cpu.isSystemUsageAvailable) "${cpu.cpuUsagePercent}% System Load" else "Usage Restricted (SELinux)",
                             color = NovaTextWhite,
-                            fontSize = 24.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Black
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
                         val maxFreq = cpu.coreFrequencies.maxOfOrNull { it.maxFreqKHz } ?: 0L
                         val curFreq = cpu.coreFrequencies.maxOfOrNull { it.curFreqKHz } ?: 0L
                         val clockStr = if (curFreq > 0) com.example.core.util.FormatUtils.formatCpuClock(curFreq)
-                            else if (maxFreq > 0) com.example.core.util.FormatUtils.formatCpuClock(maxFreq)
-                            else cpu.architecture
+                        else if (maxFreq > 0) com.example.core.util.FormatUtils.formatCpuClock(maxFreq)
+                        else cpu.architecture
                         Text(
-                            text = "$clockStr • ${cpu.processorCount} Cores",
+                            text = "$clockStr • ${cpu.processorCount} Cores • ${cpu.architecture}",
                             color = NovaTextGray,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(bottom = 3.dp)
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "NovaBoost Process Load: ${cpu.processCpuUsagePercent}%",
+                            color = NovaNeonCyan,
+                            fontSize = 10.sp
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                NeonWaveGraph(color = NovaNeonCyan)
             }
-
-            Spacer(modifier = Modifier.height(10.dp))
-            NeonWaveGraph(color = NovaNeonCyan)
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // GPU Card with Purple Waveform
-        NeonCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Cyber GPU Icon Badge in Purple
-                Box(
-                    modifier = Modifier
-                        .size(54.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(NovaNeonPurple.copy(alpha = 0.15f))
-                        .border(1.5.dp, NovaNeonPurple, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
+        } else {
+            // GPU Card
+            NeonCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(text = "GPU", color = NovaNeonPurple, fontSize = 13.sp, fontWeight = FontWeight.Black)
-                }
+                    Box(
+                        modifier = Modifier
+                            .size(54.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(NovaNeonPurple.copy(alpha = 0.15f))
+                            .border(1.5.dp, NovaNeonPurple, RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(text = "GPU", color = NovaNeonPurple, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                    }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(14.dp))
 
-                Column {
-                    Text(text = "GPU", color = NovaTextGray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    Column {
+                        Text(text = "Graphics Renderer", color = NovaTextGray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         Text(
-                            text = if (gpu.vulkanSupported) "Active" else "Ready",
+                            text = gpu.renderer.take(24),
                             color = NovaTextWhite,
-                            fontSize = 22.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Black
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = gpu.renderer.take(18).ifBlank { "System GPU" },
+                            text = "${gpu.openGlVersion} • Vulkan: ${gpu.vulkanLevel}",
                             color = NovaTextGray,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(bottom = 3.dp)
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = gpu.realTimeLoadStatus,
+                            color = NovaNeonPurple,
+                            fontSize = 10.sp
                         )
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
-            NeonWaveGraph(color = NovaNeonPurple)
+                Spacer(modifier = Modifier.height(10.dp))
+                NeonWaveGraph(color = NovaNeonPurple)
+            }
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -241,58 +242,61 @@ fun CpuGpuScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFFF3D71).copy(alpha = 0.15f)),
+                        .background(Color(0xFFFF9100).copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(imageVector = Icons.Default.Thermostat, contentDescription = null, tint = Color(0xFFFF3D71), modifier = Modifier.size(24.dp))
+                    Icon(imageVector = Icons.Default.Thermostat, contentDescription = null, tint = Color(0xFFFF9100), modifier = Modifier.size(20.dp))
                 }
-
-                Spacer(modifier = Modifier.width(14.dp))
-
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
-                    Text(text = "Temperature", color = NovaTextGray, fontSize = 12.sp)
-                    Text(
-                        text = "${battery.temperatureCelsius.toInt()}°C",
-                        color = NovaTextWhite,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Detailed Info Pill Button
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(NovaCardBorder.copy(alpha = 0.5f))
-                    .clickable { showDetailedInfo = !showDetailedInfo },
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = if (showDetailedInfo) "Hide Details" else "Detailed Info",
-                    color = NovaTextWhite,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            if (showDetailedInfo) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(text = "Architecture: ${cpu.architecture}", color = NovaTextGray, fontSize = 11.sp)
-                    Text(text = "Hardware SoC: ${cpu.hardwareName} (${cpu.socModel})", color = NovaTextGray, fontSize = 11.sp)
-                    Text(text = "OpenGL ES: ${gpu.openGlVersion}", color = NovaTextGray, fontSize = 11.sp)
-                    Text(text = "Vulkan Level: ${gpu.vulkanLevel}", color = NovaTextGray, fontSize = 11.sp)
+                    Text(text = "Thermal State", color = NovaTextGray, fontSize = 11.sp)
+                    val tempStr = if (battery.isAvailable) "${"%.1f".format(battery.temperatureCelsius)}°C" else "Unavailable"
+                    Text(text = "$tempStr (${battery.thermalStatus})", color = NovaTextWhite, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Detailed Hardware Specs Button
+        NeonActionButton(
+            text = "Detailed Hardware Telemetry",
+            onClick = { showDetailedInfo = true },
+            testTag = "cpu_gpu_details_button"
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
+    }
+
+    if (showDetailedInfo) {
+        AlertDialog(
+            onDismissRequest = { showDetailedInfo = false },
+            title = {
+                Text(text = "Hardware Architecture Info", color = NovaTextWhite, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column {
+                    Text(text = "• CPU Architecture: ${cpu.architecture}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• Logical Processors: ${cpu.processorCount}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• SoC Model: ${cpu.socModel}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• Telemetry Mode: ${cpu.cpuUsageMode}", color = NovaTextGray, fontSize = 11.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = "• GPU Vendor: ${gpu.vendor}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• OpenGL Version: ${gpu.openGlVersion}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• Max Texture Dimension: ${gpu.maxTextureSize} px", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• Vulkan Level: ${gpu.vulkanLevel}", color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "• ASTC Compression: ${if (gpu.astcSupported) "Supported" else "No"}", color = NovaTextGray, fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDetailedInfo = false }) {
+                    Text("Close", color = NovaNeonCyan)
+                }
+            },
+            containerColor = NovaCardBg,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }

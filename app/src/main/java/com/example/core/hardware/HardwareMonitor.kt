@@ -8,12 +8,21 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Debug
 import android.os.Environment
 import android.os.PowerManager
+import android.os.Process
 import android.os.StatFs
-import android.view.WindowManager
 import java.io.File
 import java.io.RandomAccessFile
+
+sealed class MetricResult<out T> {
+    object Loading : MetricResult<Nothing>()
+    data class Available<out T>(val data: T) : MetricResult<T>()
+    data class Unavailable(val reason: String) : MetricResult<Nothing>()
+    data class PermissionRequired(val permission: String) : MetricResult<Nothing>()
+    data class Error(val message: String) : MetricResult<Nothing>()
+}
 
 data class RamInfo(
     val totalBytes: Long,
@@ -22,10 +31,14 @@ data class RamInfo(
     val usagePercentage: Int,
     val isLowMemory: Boolean,
     val thresholdBytes: Long,
+    val processUsedBytes: Long,
+    val cachedBytes: Long,
     val swapTotalBytes: Long,
     val swapFreeBytes: Long,
     val zRamAccessible: Boolean,
-    val zRamUsageString: String
+    val zRamUsageString: String,
+    val swapSourceType: String,
+    val swapSupportStatus: String
 )
 
 data class StorageInfo(
@@ -47,13 +60,16 @@ data class CpuInfo(
     val architecture: String,
     val hardwareName: String,
     val socModel: String,
+    val isSystemUsageAvailable: Boolean,
     val cpuUsagePercent: Int,
     val cpuUsageMode: String,
+    val processCpuUsagePercent: Int,
     val coreFrequencies: List<CpuCoreFreq>,
     val features: List<String>
 )
 
 data class BatteryInfo(
+    val isAvailable: Boolean,
     val levelPercent: Int,
     val temperatureCelsius: Float,
     val voltageMv: Int,
@@ -87,6 +103,10 @@ class HardwareMonitor(private val context: Context) {
     private var lastCpuTotalJiffies: Long = 0L
     private var lastCpuWorkJiffies: Long = 0L
 
+    private var lastProcessUtime: Long = 0L
+    private var lastProcessStime: Long = 0L
+    private var lastProcessSampleTimeMs: Long = 0L
+
     fun getRamInfo(): RamInfo {
         val memInfo = ActivityManager.MemoryInfo()
         activityManager?.getMemoryInfo(memInfo)
@@ -102,11 +122,18 @@ class HardwareMonitor(private val context: Context) {
         val used = (total - avail).coerceAtLeast(0L)
         val usagePct = if (total > 0) ((used.toDouble() / total) * 100).toInt() else 0
 
-        // Parse /proc/meminfo for Linux swap & zRAM details
+        // NovaBoost process memory footprint
+        val runtimeUsed = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
+
+        // Parse Linux /proc/meminfo for Swap, zRAM, and Cached buffers
         var swapTotal = 0L
         var swapFree = 0L
-        var zramString = "Not detected or protected by kernel"
-        var zramFound = false
+        var cached = 0L
+        var buffers = 0L
+        var zramActiveFound = false
+        var zramUsageStr = "zRAM information unavailable on this device"
+        var swapSource = "Not detected or protected by kernel"
+        var swapStatus = "Kernel Restricted"
 
         try {
             val meminfoFile = File("/proc/meminfo")
@@ -120,22 +147,54 @@ class HardwareMonitor(private val context: Context) {
                         when (key) {
                             "SwapTotal" -> swapTotal = kbVal * 1024L
                             "SwapFree" -> swapFree = kbVal * 1024L
+                            "Cached" -> cached = kbVal * 1024L
+                            "Buffers" -> buffers = kbVal * 1024L
                             "ZRam", "Zswap" -> {
-                                zramFound = true
-                                zramString = "${kbVal / 1024} MB (active)"
+                                zramActiveFound = true
+                                zramUsageStr = "${kbVal / 1024} MB (active)"
                             }
                         }
                     }
                 }
             }
         } catch (_: Exception) {
-            // Protected on some OEM kernels
+            // Protected on some OEM SELinux policies
         }
 
-        if (swapTotal > 0 && !zramFound) {
-            zramFound = true
+        // Check /proc/swaps if accessible
+        try {
+            val swapsFile = File("/proc/swaps")
+            if (swapsFile.exists() && swapsFile.canRead()) {
+                swapsFile.forEachLine { line ->
+                    if (line.contains("zram", ignoreCase = true)) {
+                        zramActiveFound = true
+                        swapSource = "Linux zRAM (Compressed In-Memory)"
+                        swapStatus = "Active (zRAM)"
+                    } else if (line.contains("partition", ignoreCase = true) || line.contains("file", ignoreCase = true)) {
+                        swapSource = "Storage-backed Swap Partition"
+                        swapStatus = "Active (Partition)"
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        if (swapTotal > 0) {
             val swapUsed = swapTotal - swapFree
-            zramString = "Total: ${swapTotal / (1024 * 1024)} MB | Active: ${swapUsed / (1024 * 1024)} MB"
+            if (swapSource == "Not detected or protected by kernel") {
+                // Determine whether it is zRAM or partition
+                if (File("/sys/block/zram0").exists()) {
+                    zramActiveFound = true
+                    swapSource = "Linux zRAM (/sys/block/zram0)"
+                    swapStatus = "Active"
+                } else {
+                    swapSource = "System Swap"
+                    swapStatus = "Active"
+                }
+            }
+            zramUsageStr = "Total: ${swapTotal / (1024 * 1024)} MB | Active: ${swapUsed / (1024 * 1024)} MB"
+        } else {
+            swapSource = "STORAGE SWAP ACTIVATION: NOT AVAILABLE (Requires Root / Kernel Privilege)"
+            swapStatus = "Not Active"
         }
 
         return RamInfo(
@@ -145,10 +204,14 @@ class HardwareMonitor(private val context: Context) {
             usagePercentage = usagePct,
             isLowMemory = memInfo.lowMemory,
             thresholdBytes = memInfo.threshold,
+            processUsedBytes = runtimeUsed.coerceAtLeast(0L),
+            cachedBytes = cached + buffers,
             swapTotalBytes = swapTotal,
             swapFreeBytes = swapFree,
-            zRamAccessible = zramFound,
-            zRamUsageString = zramString
+            zRamAccessible = zramActiveFound,
+            zRamUsageString = zramUsageStr,
+            swapSourceType = swapSource,
+            swapSupportStatus = swapStatus
         )
     }
 
@@ -184,7 +247,7 @@ class HardwareMonitor(private val context: Context) {
 
     fun getCpuInfo(): CpuInfo {
         val cores = Runtime.getRuntime().availableProcessors()
-        val arch = Build.SUPPORTED_ABIS.firstOrNull() ?: Build.CPU_ABI ?: "Unknown"
+        val arch = Build.SUPPORTED_ABIS.firstOrNull() ?: Build.CPU_ABI ?: "ARM"
         val hardware = Build.HARDWARE
         val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             Build.SOC_MODEL
@@ -199,18 +262,18 @@ class HardwareMonitor(private val context: Context) {
             freqs.add(CpuCoreFreq(i, curFreq, maxFreq))
         }
 
-        // Measure CPU usage honestly
-        var usage = 0
-        var mode = "Real-time thread sampling"
+        // Measure system CPU usage via /proc/stat delta calculation
         val statUsage = sampleProcStatCpuUsage()
-        if (statUsage != null) {
-            usage = statUsage
-            mode = "Direct kernel /proc/stat"
+        val isSystemAvailable = statUsage != null
+        val usage = statUsage ?: 0
+        val mode = if (isSystemAvailable) {
+            "Direct kernel /proc/stat"
         } else {
-            // Android 8+ SELinux restricts /proc/stat for non-system apps
-            usage = sampleAppThreadLoad()
-            mode = "System thread load assessment (SELinux restricted)"
+            "DEVICE CPU UTILIZATION UNAVAILABLE (Restricted by Android SELinux)"
         }
+
+        // Measure NovaBoost's own process CPU usage via /proc/self/stat
+        val processUsage = sampleProcessCpuUsage(cores)
 
         val features = mutableListOf<String>()
         try {
@@ -230,8 +293,10 @@ class HardwareMonitor(private val context: Context) {
             architecture = arch,
             hardwareName = hardware,
             socModel = soc,
+            isSystemUsageAvailable = isSystemAvailable,
             cpuUsagePercent = usage.coerceIn(0, 100),
             cpuUsageMode = mode,
+            processCpuUsagePercent = processUsage,
             coreFrequencies = freqs,
             features = features.distinct()
         )
@@ -273,7 +338,7 @@ class HardwareMonitor(private val context: Context) {
             lastCpuTotalJiffies = total
             lastCpuWorkJiffies = work
 
-            if (deltaTotal > 0) {
+            if (deltaTotal > 0 && lastCpuTotalJiffies > 0) {
                 ((deltaWork.toDouble() / deltaTotal) * 100).toInt().coerceIn(0, 100)
             } else {
                 null
@@ -283,25 +348,62 @@ class HardwareMonitor(private val context: Context) {
         }
     }
 
-    private fun sampleAppThreadLoad(): Int {
-        // Safe heuristic based on available processors and runtime active threads
-        val activeThreads = Thread.activeCount()
-        val cores = Runtime.getRuntime().availableProcessors()
-        val loadEstimate = (activeThreads.toDouble() / (cores * 3) * 100).toInt()
-        return loadEstimate.coerceIn(5, 85)
+    private fun sampleProcessCpuUsage(coreCount: Int): Int {
+        return try {
+            val statFile = File("/proc/self/stat")
+            if (!statFile.exists() || !statFile.canRead()) return 0
+            val content = statFile.readText()
+            val parts = content.split(" ")
+            if (parts.size > 14) {
+                val utime = parts[13].toLongOrNull() ?: 0L
+                val stime = parts[14].toLongOrNull() ?: 0L
+                val now = System.currentTimeMillis()
+
+                val timeDelta = now - lastProcessSampleTimeMs
+                val tickDelta = (utime + stime) - (lastProcessUtime + lastProcessStime)
+
+                lastProcessUtime = utime
+                lastProcessStime = stime
+                lastProcessSampleTimeMs = now
+
+                if (timeDelta > 0 && lastProcessSampleTimeMs > 0 && tickDelta >= 0) {
+                    // 100 jiffies per second on standard Linux kernel
+                    val cpuTimeMs = tickDelta * 10L
+                    val pct = ((cpuTimeMs.toDouble() / (timeDelta * coreCount)) * 100).toInt()
+                    pct.coerceIn(0, 100)
+                } else 0
+            } else 0
+        } catch (_: Exception) {
+            0
+        }
     }
 
     fun getBatteryInfo(): BatteryInfo {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 0
-        val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
-        val pct = if (scale > 0) (level * 100 / scale) else 0
+        if (intent == null) {
+            return BatteryInfo(
+                isAvailable = false,
+                levelPercent = 0,
+                temperatureCelsius = 0.0f,
+                voltageMv = 0,
+                status = "Unavailable",
+                health = "Unavailable",
+                powerSource = "Unknown",
+                technology = "Unknown",
+                thermalStatus = "Unavailable",
+                isOverheating = false
+            )
+        }
 
-        val tempTenths = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
+
+        val tempTenths = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
         val tempCelsius = tempTenths / 10.0f
-        val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
+        val voltage = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
 
-        val statusInt = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val statusInt = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
         val status = when (statusInt) {
             BatteryManager.BATTERY_STATUS_CHARGING -> "Charging"
             BatteryManager.BATTERY_STATUS_DISCHARGING -> "Discharging"
@@ -310,7 +412,7 @@ class HardwareMonitor(private val context: Context) {
             else -> "Unknown"
         }
 
-        val healthInt = intent?.getIntExtra(BatteryManager.EXTRA_HEALTH, -1) ?: -1
+        val healthInt = intent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)
         val health = when (healthInt) {
             BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
             BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
@@ -321,7 +423,7 @@ class HardwareMonitor(private val context: Context) {
             else -> "Normal"
         }
 
-        val pluggedInt = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val pluggedInt = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
         val powerSource = when (pluggedInt) {
             BatteryManager.BATTERY_PLUGGED_AC -> "AC Wall Charger"
             BatteryManager.BATTERY_PLUGGED_USB -> "USB Port"
@@ -329,9 +431,9 @@ class HardwareMonitor(private val context: Context) {
             else -> "Battery Power"
         }
 
-        val tech = intent?.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Li-ion"
+        val tech = intent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Li-ion"
 
-        var thermalStatusStr = "Normal"
+        var thermalStatusStr = "Nominal (Cool)"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && powerManager != null) {
             thermalStatusStr = when (powerManager.currentThermalStatus) {
                 PowerManager.THERMAL_STATUS_NONE -> "Nominal (Cool)"
@@ -348,6 +450,7 @@ class HardwareMonitor(private val context: Context) {
         val overheating = tempCelsius > 42.0f || healthInt == BatteryManager.BATTERY_HEALTH_OVERHEAT
 
         return BatteryInfo(
+            isAvailable = true,
             levelPercent = pct,
             temperatureCelsius = tempCelsius,
             voltageMv = voltage,

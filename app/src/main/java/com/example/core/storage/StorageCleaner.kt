@@ -10,7 +10,7 @@ import java.security.MessageDigest
 
 enum class CleanCategory(val title: String, val description: String) {
     TEMP_FILES("Temporary & Cache Files", "Redundant log files, temporary build traces, and cache objects"),
-    DUPLICATE_FILES("Duplicate Files", "Identical duplicate files discovered in accessible storage"),
+    DUPLICATE_FILES("Duplicate Files", "Identical duplicate files verified by streaming SHA-256"),
     LARGE_FILES("Large Files (> 10MB)", "Oversized files consuming significant local storage capacity"),
     EMPTY_FOLDERS("Empty Directories", "Leftover zero-byte folders from uninstalled or removed apps"),
     OBSOLETE_APKS("APK Installers", "Residual Android installation packages that are no longer needed"),
@@ -24,7 +24,7 @@ data class CleanItem(
     val sizeBytes: Long,
     val category: CleanCategory,
     val lastModified: Long,
-    val isSelected: Boolean = true
+    val isSelected: Boolean = false // CRITICAL: Default selection MUST be false (manual user selection required)
 )
 
 data class CleanCategoryGroup(
@@ -44,7 +44,9 @@ data class CleanScanResult(
 data class CleanExecutionResult(
     val bytesRecovered: Long,
     val itemsDeleted: Int,
-    val categoriesCleaned: List<CleanCategory>
+    val failedCount: Int,
+    val categoriesCleaned: List<CleanCategory>,
+    val isVerified: Boolean
 )
 
 class StorageCleaner(private val context: Context) {
@@ -89,8 +91,8 @@ class StorageCleaner(private val context: Context) {
             )
         }
 
-        // 2. Identify duplicate files among accessible files
-        val duplicateItems = detectDuplicates(allScannedFiles)
+        // 2. Identify duplicate files with streaming full-file SHA-256
+        val duplicateItems = detectDuplicatesStreaming(allScannedFiles)
 
         val groups = mutableListOf<CleanCategoryGroup>()
 
@@ -145,7 +147,7 @@ class StorageCleaner(private val context: Context) {
                     sizeBytes = 0L,
                     category = CleanCategory.EMPTY_FOLDERS,
                     lastModified = dir.lastModified(),
-                    isSelected = true
+                    isSelected = false
                 )
             )
             return
@@ -169,7 +171,8 @@ class StorageCleaner(private val context: Context) {
                             path = file.absolutePath,
                             sizeBytes = size,
                             category = CleanCategory.TEMP_FILES,
-                            lastModified = file.lastModified()
+                            lastModified = file.lastModified(),
+                            isSelected = false
                         )
                     )
                 }
@@ -183,7 +186,8 @@ class StorageCleaner(private val context: Context) {
                             path = file.absolutePath,
                             sizeBytes = size,
                             category = CleanCategory.OBSOLETE_APKS,
-                            lastModified = file.lastModified()
+                            lastModified = file.lastModified(),
+                            isSelected = false
                         )
                     )
                 }
@@ -197,7 +201,8 @@ class StorageCleaner(private val context: Context) {
                             path = file.absolutePath,
                             sizeBytes = size,
                             category = CleanCategory.LARGE_FILES,
-                            lastModified = file.lastModified()
+                            lastModified = file.lastModified(),
+                            isSelected = false
                         )
                     )
                 }
@@ -211,7 +216,8 @@ class StorageCleaner(private val context: Context) {
                             path = file.absolutePath,
                             sizeBytes = size,
                             category = CleanCategory.OLD_DOWNLOADS,
-                            lastModified = file.lastModified()
+                            lastModified = file.lastModified(),
+                            isSelected = false
                         )
                     )
                 }
@@ -219,19 +225,26 @@ class StorageCleaner(private val context: Context) {
         }
     }
 
-    private fun detectDuplicates(files: List<File>): List<CleanItem> {
+    /**
+     * Reliable streaming duplicate verification:
+     * 1. Compare file sizes.
+     * 2. Group candidates with equal sizes.
+     * 3. Compute full-file SHA-256 digest using streaming reads (64KB buffer, low memory).
+     * 4. Exclude unreadable files.
+     */
+    private fun detectDuplicatesStreaming(files: List<File>): List<CleanItem> {
         val duplicates = mutableListOf<CleanItem>()
-        // Group by exact file size first to avoid unnecessary hashing
-        val bySize = files.filter { it.length() > 1024 }.groupBy { it.length() }
+        // Filter out zero-byte or tiny files (< 1KB) to avoid false noise
+        val bySize = files.filter { it.length() > 1024L }.groupBy { it.length() }
 
         for ((_, group) in bySize) {
             if (group.size < 2) continue
-            // Check 4KB hash
-            val byHash = mutableMapOf<String, File>()
+
+            val hashToFileMap = mutableMapOf<String, File>()
             for (file in group) {
-                val hash = calculateQuickHash(file) ?: continue
-                if (byHash.containsKey(hash)) {
-                    // It's a duplicate!
+                val fullHash = calculateFullStreamingSha256(file) ?: continue
+                if (hashToFileMap.containsKey(fullHash)) {
+                    // Confirmed duplicate with matching size and full SHA-256
                     duplicates.add(
                         CleanItem(
                             id = file.absolutePath,
@@ -239,54 +252,75 @@ class StorageCleaner(private val context: Context) {
                             path = file.absolutePath,
                             sizeBytes = file.length(),
                             category = CleanCategory.DUPLICATE_FILES,
-                            lastModified = file.lastModified()
+                            lastModified = file.lastModified(),
+                            isSelected = false
                         )
                     )
                 } else {
-                    byHash[hash] = file
+                    hashToFileMap[fullHash] = file
                 }
             }
         }
         return duplicates
     }
 
-    private fun calculateQuickHash(file: File): String? {
-        return try {
-            val md = MessageDigest.getInstance("SHA-256")
-            FileInputStream(file).use { fis ->
-                val buffer = ByteArray(4096)
-                val read = fis.read(buffer)
-                if (read > 0) md.update(buffer, 0, read)
+    companion object {
+        /**
+         * Computes complete streaming SHA-256 hash without loading entire file into RAM.
+         */
+        fun calculateFullStreamingSha256(file: File): String? {
+            return try {
+                if (!file.exists() || !file.canRead() || file.isDirectory) return null
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteArray(65536) // 64 KB streaming buffer
+                FileInputStream(file).use { fis ->
+                    var bytesRead: Int
+                    while (fis.read(buffer).also { bytesRead = it } != -1) {
+                        if (bytesRead > 0) {
+                            digest.update(buffer, 0, bytesRead)
+                        }
+                    }
+                }
+                digest.digest().joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) {
+                null
             }
-            md.digest().joinToString("") { "%02x".format(it) }
-        } catch (_: Exception) {
-            null
         }
     }
 
+    /**
+     * Safe verified deletion workflow:
+     * SCAN -> ANALYZE -> REVIEW -> SELECT -> CONFIRM -> DELETE -> VERIFY
+     */
     suspend fun executeClean(itemsToDelete: List<CleanItem>): CleanExecutionResult = withContext(Dispatchers.IO) {
         var freedBytes = 0L
         var deletedCount = 0
+        var failedCount = 0
         val affectedCategories = mutableSetOf<CleanCategory>()
 
         for (item in itemsToDelete) {
             try {
                 val file = File(item.path)
-                if (file.exists()) {
+                // Re-verify existence and metadata before deletion
+                if (file.exists() && file.canWrite()) {
                     val size = if (file.isDirectory) 0L else file.length()
                     val deleted = if (file.isDirectory) {
                         file.deleteRecursively()
                     } else {
                         file.delete()
                     }
-                    if (deleted) {
+                    if (deleted && !file.exists()) {
                         freedBytes += size
                         deletedCount++
                         affectedCategories.add(item.category)
+                    } else {
+                        failedCount++
                     }
+                } else {
+                    failedCount++
                 }
             } catch (_: Exception) {
-                // Skip protected files
+                failedCount++
             }
         }
 
@@ -303,7 +337,9 @@ class StorageCleaner(private val context: Context) {
         CleanExecutionResult(
             bytesRecovered = freedBytes,
             itemsDeleted = deletedCount,
-            categoriesCleaned = affectedCategories.toList()
+            failedCount = failedCount,
+            categoriesCleaned = affectedCategories.toList(),
+            isVerified = true
         )
     }
 }

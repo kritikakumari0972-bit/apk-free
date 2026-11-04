@@ -1,6 +1,7 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.core.apps.AppManager
@@ -17,6 +18,7 @@ import com.example.core.hardware.HardwareMonitor
 import com.example.core.hardware.NetworkStatusInfo
 import com.example.core.hardware.RamInfo
 import com.example.core.hardware.StorageInfo
+import com.example.core.network.DnsTestResult
 import com.example.core.network.NetworkDetails
 import com.example.core.network.NetworkDiagnostics
 import com.example.core.network.PingResult
@@ -30,6 +32,7 @@ import com.example.data.CleanHistoryRecord
 import com.example.data.GamingSessionRecord
 import com.example.data.NovaDatabase
 import com.example.data.PreferencesManager
+import com.example.services.NovaBoostVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,6 +43,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class AutoScanStep(
     val title: String,
@@ -73,47 +77,15 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         database.gamingSessionDao()
     )
 
-    // Hardware Telemetry States with fail-safe defaults
-    val ramInfo = MutableStateFlow(
-        try { hardwareMonitor.getRamInfo() } catch (_: Throwable) {
-            RamInfo(0L, 0L, 0L, 0, false, 0L, 0L, 0L, false, "Protected")
-        }
-    )
-    val storageInfo = MutableStateFlow(
-        try { hardwareMonitor.getStorageInfo() } catch (_: Throwable) {
-            StorageInfo(0L, 0L, 0L, 0, "/data")
-        }
-    )
-    val cpuInfo = MutableStateFlow(
-        try { hardwareMonitor.getCpuInfo() } catch (_: Throwable) {
-            CpuInfo(1, "ARM", "Generic", "Generic", 0, "Default", emptyList(), emptyList())
-        }
-    )
-    val batteryInfo = MutableStateFlow(
-        try { hardwareMonitor.getBatteryInfo() } catch (_: Throwable) {
-            BatteryInfo(100, 25f, 4000, "Normal", "Good", "Battery", "Li-ion", "Normal", false)
-        }
-    )
-    val displayInfo = MutableStateFlow(
-        try { hardwareMonitor.getDisplayInfo() } catch (_: Throwable) {
-            DisplayInfo("1080 × 2400", 420, 60f)
-        }
-    )
-    val networkStatus = MutableStateFlow(
-        try { hardwareMonitor.getNetworkStatus() } catch (_: Throwable) {
-            NetworkStatusInfo(true, "Wi-Fi", false, 0)
-        }
-    )
-    val gpuDiagnostics = MutableStateFlow(
-        try { GpuProbe.probeGpu(context) } catch (_: Throwable) {
-            GpuDiagnostics("Android GPU", "System", "OpenGL ES 2.0+", 2048, false, "Not Supported", 0, emptyList(), false, false)
-        }
-    )
-    val networkDetails = MutableStateFlow(
-        try { networkDiagnostics.getNetworkDetails() } catch (_: Throwable) {
-            NetworkDetails("Active Connection", true, true, false, 0, 0, -100, 0, 0)
-        }
-    )
+    // Hardware Telemetry States with genuine initial readings
+    val ramInfo = MutableStateFlow(hardwareMonitor.getRamInfo())
+    val storageInfo = MutableStateFlow(hardwareMonitor.getStorageInfo())
+    val cpuInfo = MutableStateFlow(hardwareMonitor.getCpuInfo())
+    val batteryInfo = MutableStateFlow(hardwareMonitor.getBatteryInfo())
+    val displayInfo = MutableStateFlow(hardwareMonitor.getDisplayInfo())
+    val networkStatus = MutableStateFlow(hardwareMonitor.getNetworkStatus())
+    val gpuDiagnostics = MutableStateFlow(GpuProbe.probeGpu(context))
+    val networkDetails = MutableStateFlow(networkDiagnostics.getNetworkDetails())
 
     // Dynamic Health Score & History
     val healthScore = MutableStateFlow(
@@ -130,6 +102,7 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
     // Cleaner State
     val isCleaningScanning = MutableStateFlow(false)
     val cleanScanResult = MutableStateFlow<CleanScanResult?>(null)
+    // CRITICAL: Default selection MUST be empty (manual user selection required)
     val selectedCleanItemIds = MutableStateFlow<Set<String>>(emptySet())
     val cleanExecutionResult = MutableStateFlow<CleanExecutionResult?>(null)
     val cleanHistory: StateFlow<List<CleanHistoryRecord>> = database.cleanHistoryDao().getAllHistory()
@@ -148,9 +121,14 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
 
     // Network & Speed Test State
     val pingResult = MutableStateFlow<PingResult?>(null)
+    val dnsResult = MutableStateFlow<DnsTestResult?>(null)
     val isPinging = MutableStateFlow(false)
     val speedTestProgress = MutableStateFlow<SpeedTestProgress?>(null)
     val isTestingSpeed = MutableStateFlow(false)
+
+    // VPN Real Status
+    val isVpnActive: StateFlow<Boolean> = NovaBoostVpnService.isVpnRunning
+    val vpnStatusText: StateFlow<String> = NovaBoostVpnService.vpnStatusMessage
 
     // Auto-Scan State
     val autoScanReport = MutableStateFlow<AutoScanReport?>(null)
@@ -187,13 +165,17 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         else if (storageUsage > 75) score -= 10
         else if (storageUsage > 60) score -= 5
 
-        if (battery.temperatureCelsius > 42f) score -= 15
-        else if (battery.temperatureCelsius > 38f) score -= 6
+        if (battery.isAvailable) {
+            if (battery.temperatureCelsius > 42f) score -= 15
+            else if (battery.temperatureCelsius > 38f) score -= 6
+
+            if (!battery.health.equals("Good", ignoreCase = true) && !battery.health.equals("Normal", ignoreCase = true)) {
+                score -= 10
+            }
+        }
 
         if (ram.isLowMemory) score -= 15
-        if (!battery.health.equals("Good", ignoreCase = true) && !battery.health.equals("Normal", ignoreCase = true)) {
-            score -= 10
-        }
+
         return score.coerceIn(20, 100)
     }
 
@@ -250,9 +232,8 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             cleanExecutionResult.value = null
             val result = storageCleaner.scanStorage()
             cleanScanResult.value = result
-            // By default, select all items
-            val allIds = result.groups.flatMap { it.items }.map { it.id }.toSet()
-            selectedCleanItemIds.value = allIds
+            // CRITICAL REQUIREMENT: Default selection must be EMPTY (no auto-selection)
+            selectedCleanItemIds.value = emptySet()
             isCleaningScanning.value = false
         }
     }
@@ -270,6 +251,15 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         val groupIds = group.items.map { it.id }
         if (select) current.addAll(groupIds) else current.removeAll(groupIds.toSet())
         selectedCleanItemIds.value = current
+    }
+
+    fun selectAllDetectedItems() {
+        val scan = cleanScanResult.value ?: return
+        selectedCleanItemIds.value = scan.groups.flatMap { it.items }.map { it.id }.toSet()
+    }
+
+    fun clearItemSelection() {
+        selectedCleanItemIds.value = emptySet()
     }
 
     fun executeCleanSelected() {
@@ -349,7 +339,8 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
     fun runNetworkPing() {
         viewModelScope.launch {
             isPinging.value = true
-            pingResult.value = networkDiagnostics.measureSocketPing()
+            pingResult.value = networkDiagnostics.measureTcpHandshake()
+            dnsResult.value = networkDiagnostics.testDnsResolution()
             isPinging.value = false
         }
     }
@@ -357,7 +348,7 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
     fun runSpeedTest() {
         viewModelScope.launch {
             isTestingSpeed.value = true
-            networkDiagnostics.runDownloadSpeedTest { progress ->
+            networkDiagnostics.runFullSpeedTest { progress ->
                 speedTestProgress.value = progress
                 if (progress.isFinished) {
                     isTestingSpeed.value = false
@@ -366,7 +357,33 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // Central Auto-Scan
+    // VPN Real Actions
+    fun requestVpnConnect(serverHost: String, serverPort: Int = 1194) {
+        if (serverHost.isBlank()) {
+            return
+        }
+        val intent = Intent(context, NovaBoostVpnService::class.java).apply {
+            action = NovaBoostVpnService.ACTION_CONNECT
+            putExtra(NovaBoostVpnService.EXTRA_SERVER_HOST, serverHost)
+            putExtra(NovaBoostVpnService.EXTRA_SERVER_PORT, serverPort)
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun requestVpnDisconnect() {
+        val intent = Intent(context, NovaBoostVpnService::class.java).apply {
+            action = NovaBoostVpnService.ACTION_DISCONNECT
+        }
+        context.startService(intent)
+    }
+
+    // Central Progressive Auto-Scan
     fun runAutoScan() {
         viewModelScope.launch {
             val initialSteps = listOf(
@@ -390,27 +407,26 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             )
 
             // Step 1: RAM
-            delay(400)
-            val ram = hardwareMonitor.getRamInfo()
+            val ram = withContext(Dispatchers.Default) { hardwareMonitor.getRamInfo() }
             val step1 = AutoScanStep(
                 "RAM & Linux zRAM",
                 "${ram.usagePercentage}% utilized",
                 true,
-                "${ram.availableBytes / (1024 * 1024)} MB available of ${ram.totalBytes / (1024 * 1024)} MB. zRAM: ${if (ram.zRamAccessible) "Active" else "Restricted"}"
+                "${ram.availableBytes / (1024 * 1024)} MB available of ${ram.totalBytes / (1024 * 1024)} MB. zRAM: ${ram.swapSupportStatus}"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 25, steps = listOf(step1) + initialSteps.drop(1))
 
             // Step 2: Storage
-            delay(400)
-            val storage = hardwareMonitor.getStorageInfo()
+            val storage = withContext(Dispatchers.Default) { hardwareMonitor.getStorageInfo() }
             val step2 = AutoScanStep(
                 "Storage Capacity",
                 "${storage.usagePercentage}% occupied",
                 true,
                 "${storage.availableBytes / (1024 * 1024 * 1024)} GB available out of ${storage.totalBytes / (1024 * 1024 * 1024)} GB"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 40, steps = listOf(step1, step2) + initialSteps.drop(2))
 
             // Step 3 & 4: Cleaner
-            delay(500)
             val scanResult = storageCleaner.scanStorage()
             val step3 = AutoScanStep(
                 "Junk & Temporary Files",
@@ -422,21 +438,22 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
                 "Duplicate & Large Files",
                 "Analyzed",
                 true,
-                "Duplicates and large files segregated into user-selectable groups"
+                "Duplicates and large files segregated into user-selectable groups (Unselected by default for safety)"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 60, steps = listOf(step1, step2, step3, step4) + initialSteps.drop(4))
 
             // Step 5: CPU
-            delay(400)
-            val cpu = hardwareMonitor.getCpuInfo()
+            val cpu = withContext(Dispatchers.Default) { hardwareMonitor.getCpuInfo() }
             val step5 = AutoScanStep(
                 "CPU & Logical Cores",
                 "${cpu.processorCount} Cores (${cpu.architecture})",
                 true,
-                "Load: ${cpu.cpuUsagePercent}% (${cpu.cpuUsageMode})"
+                if (cpu.isSystemUsageAvailable) "Load: ${cpu.cpuUsagePercent}% (${cpu.cpuUsageMode})"
+                else "Available (${cpu.processorCount} Cores) | System usage restricted by SELinux"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 75, steps = listOf(step1, step2, step3, step4, step5) + initialSteps.drop(5))
 
             // Step 6: GPU
-            delay(300)
             val gpu = gpuDiagnostics.value
             val step6 = AutoScanStep(
                 "GPU Hardware & Vulkan",
@@ -444,28 +461,28 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
                 true,
                 "${gpu.openGlVersion} | Vulkan: ${gpu.vulkanLevel}"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 85, steps = listOf(step1, step2, step3, step4, step5, step6) + initialSteps.drop(6))
 
             // Step 7: Battery
-            delay(300)
-            val bat = hardwareMonitor.getBatteryInfo()
+            val bat = withContext(Dispatchers.Default) { hardwareMonitor.getBatteryInfo() }
             val step7 = AutoScanStep(
                 "Battery Health & Voltage",
-                "${bat.levelPercent}% (${bat.health})",
+                if (bat.isAvailable) "${bat.levelPercent}% (${bat.health})" else "Unavailable",
                 true,
-                "${"%.1f".format(bat.temperatureCelsius)}°C | ${bat.voltageMv} mV | ${bat.thermalStatus}"
+                if (bat.isAvailable) "${"%.1f".format(bat.temperatureCelsius)}°C | ${bat.voltageMv} mV | ${bat.thermalStatus}" else "Battery info unavailable"
             )
+            autoScanReport.value = autoScanReport.value?.copy(progressPercent = 95, steps = listOf(step1, step2, step3, step4, step5, step6, step7) + initialSteps.drop(7))
 
             // Step 8: Network
-            delay(400)
-            val ping = networkDiagnostics.measureSocketPing()
+            val ping = networkDiagnostics.measureTcpHandshake()
             val step8 = AutoScanStep(
                 "Network & Latency",
                 if (ping.isSuccess) "${ping.latencyMs} ms" else "Offline / Timeout",
                 true,
-                "DNS target: ${ping.targetHost}"
+                "Target: ${ping.targetHost} (${ping.measurementType})"
             )
 
-            // Calculate transparent device health score based on real metrics
+            // Transparent device health score based on real metrics
             var score = 100
             val findings = mutableListOf<String>()
             val recommendations = mutableListOf<String>()
@@ -473,27 +490,27 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             if (ram.usagePercentage > 85) {
                 score -= 15
                 findings.add("Physical RAM usage is high (${ram.usagePercentage}%).")
-                recommendations.add("Close unused background applications from App Info.")
+                recommendations.add("Close heavy background applications from App Info.")
             }
             if (storage.usagePercentage > 90) {
                 score -= 20
                 findings.add("Storage capacity is over 90% full.")
-                recommendations.add("Run NovaBoost Smart Cleaner to free up cache.")
+                recommendations.add("Review and clean temporary files in the Cleaner tab.")
             }
             if (scanResult.totalBytesFound > 50L * 1024 * 1024) {
                 score -= 10
-                findings.add("${scanResult.totalBytesFound / (1024 * 1024)} MB of removable cache and junk identified.")
-                recommendations.add("Review and clean temporary files in the Cleaner tab.")
+                findings.add("${scanResult.totalBytesFound / (1024 * 1024)} MB of cache files identified.")
+                recommendations.add("Select and remove obsolete cache items in the Cleaner tab.")
             }
-            if (bat.temperatureCelsius > 41f) {
+            if (bat.isAvailable && bat.temperatureCelsius > 41f) {
                 score -= 15
                 findings.add("Device temperature is elevated at ${"%.1f".format(bat.temperatureCelsius)}°C.")
-                recommendations.add("Pause heavy 3D gaming or unplug from fast charger.")
+                recommendations.add("Pause heavy 3D gaming or disconnect fast charger.")
             }
             if (!ping.isSuccess || ping.latencyMs > 150) {
                 score -= 10
                 findings.add("Network latency is higher than optimal.")
-                recommendations.add("Verify Wi-Fi signal strength in Network tab.")
+                recommendations.add("Verify Wi-Fi or cellular reception in Network tab.")
             }
 
             if (findings.isEmpty()) {

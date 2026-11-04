@@ -168,7 +168,7 @@ fun PerformanceReportScreen(
                 modifier = Modifier.weight(1f)
             )
             ReportMetricCard(
-                icon = Icons.Default.Delete,
+                icon = Icons.Default.Memory,
                 label = "RAM Free",
                 value = ramFreeGb,
                 iconColor = NovaNeonCyan,

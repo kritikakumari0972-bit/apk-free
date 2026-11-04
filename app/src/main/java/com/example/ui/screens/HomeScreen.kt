@@ -118,9 +118,9 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Primary Action: Smart Boost Button
+        // Primary Action: Smart Memory Diagnostics & Trim
         NeonActionButton(
-            text = "Smart Boost ⚡",
+            text = "Smart Memory Diagnostics ⚡",
             onClick = {
                 viewModel.purgeNovaBoostMemoryCache()
                 onShowPerformanceReport()
@@ -155,8 +155,8 @@ fun HomeScreen(
             MetricMiniCard(
                 icon = Icons.Default.BatteryChargingFull,
                 label = "Battery",
-                primaryValue = "${battery.levelPercent}%",
-                secondaryValue = if (battery.status.contains("Charging", ignoreCase = true)) "Charging" else "Normal",
+                primaryValue = if (battery.isAvailable) "${battery.levelPercent}%" else "Unavailable",
+                secondaryValue = if (battery.isAvailable) (if (battery.status.contains("Charging", ignoreCase = true)) "Charging" else "Normal") else "Disconnected",
                 modifier = Modifier.weight(1f)
             )
         }
