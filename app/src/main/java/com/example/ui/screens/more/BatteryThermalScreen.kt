@@ -42,7 +42,6 @@ import com.example.ui.components.NeonActionButton
 import com.example.ui.components.NeonCard
 import com.example.ui.components.NeonGlowingCircleGauge
 import com.example.ui.components.NeonTopBar
-import com.example.ui.components.NeonUsageBars
 import com.example.ui.theme.NovaBgDark
 import com.example.ui.theme.NovaCardBg
 import com.example.ui.theme.NovaCardBorder
@@ -186,30 +185,113 @@ fun BatteryThermalScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Battery Usage Histogram Card
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val powerManager = remember { context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager }
+        val isSystemPowerSave = powerManager?.isPowerSaveMode == true
+
+        // Real Telemetry & Power Diagnostics Card
         NeonCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(text = "Battery Usage", color = NovaTextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text(text = "Last 24h", color = NovaTextGray, fontSize = 11.sp)
-            }
+            Text(
+                text = "Hardware Telemetry & Diagnostics",
+                color = NovaTextWhite,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            NeonUsageBars()
+            // Voltage Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = "Voltage", color = NovaTextGray, fontSize = 12.sp)
+                val voltStr = if (battery.voltageMv > 0) {
+                    "${battery.voltageMv} mV (${String.format(java.util.Locale.US, "%.2f", battery.voltageMv / 1000f)} V)"
+                } else "Reading unavailable"
+                Text(text = voltStr, color = NovaNeonCyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            // Technology Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = "Technology", color = NovaTextGray, fontSize = 12.sp)
+                Text(text = battery.technology, color = NovaTextWhite, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            // Power Source Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = "Power Source", color = NovaTextGray, fontSize = 12.sp)
+                Text(text = battery.powerSource, color = NovaNeonYellow, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+
+            // Thermal Governor / Status Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = "Thermal Status", color = NovaTextGray, fontSize = 12.sp)
+                Text(
+                    text = battery.thermalStatus,
+                    color = if (battery.isOverheating) Color(0xFFFF3D71) else NovaNeonGreen,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            // OS Battery Saver Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(text = "OS Battery Saver", color = NovaTextGray, fontSize = 12.sp)
+                Text(
+                    text = if (isSystemPowerSave) "Active (Restricted)" else "Off (Full Performance)",
+                    color = if (isSystemPowerSave) NovaNeonYellow else NovaNeonGreen,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             NeonActionButton(
-                text = if (powerSaveActive) "Power Saving Active ✔" else "Power Saving Mode",
-                onClick = { powerSaveActive = !powerSaveActive },
-                testTag = "toggle_power_saving_mode"
+                text = "Open System Battery Settings",
+                onClick = {
+                    try {
+                        val intent = android.content.Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS).apply {
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(intent)
+                    } catch (_: Exception) {
+                        try {
+                            val fallback = android.content.Intent(android.content.Intent.ACTION_POWER_USAGE_SUMMARY).apply {
+                                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(fallback)
+                        } catch (_: Exception) {}
+                    }
+                },
+                testTag = "open_system_power_settings"
             )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
+
