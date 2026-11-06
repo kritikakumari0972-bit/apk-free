@@ -87,9 +87,11 @@ fun NetworkVpnScreen(
     val isTestingSpeed by viewModel.isTestingSpeed.collectAsState()
     val isPinging by viewModel.isPinging.collectAsState()
 
-    // Real VPN states from NovaBoostVpnService
-    val isVpnActive by viewModel.isVpnActive.collectAsState()
-    val vpnStatusText by viewModel.vpnStatusText.collectAsState()
+    // Real VPN telemetry from NovaBoostVpnService backend
+    val vpnTelemetry by viewModel.vpnTelemetry.collectAsState()
+    val isVpnConnected = vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTED
+    val isVpnConnecting = vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTING ||
+            vpnTelemetry.state == com.example.services.VpnConnectionState.HANDSHAKE_IN_PROGRESS
 
     var showVpnConfigDialog by remember { mutableStateOf(false) }
     var vpnServerInput by remember { mutableStateOf("") }
@@ -228,7 +230,7 @@ fun NetworkVpnScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Genuine VPN Card (Backed by VpnService, zero fake toggles)
+        // Genuine VPN Card (Backed by real VpnService & Remote Handshake)
         NeonCard {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -240,23 +242,41 @@ fun NetworkVpnScreen(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(CircleShape)
-                            .background(if (isVpnActive) NovaNeonGreen.copy(alpha = 0.2f) else NovaNeonBlue.copy(alpha = 0.2f)),
+                            .background(
+                                when {
+                                    isVpnConnected -> NovaNeonGreen.copy(alpha = 0.2f)
+                                    isVpnConnecting -> NovaNeonCyan.copy(alpha = 0.2f)
+                                    vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTION_FAILED -> Color(0xFFFF5252).copy(alpha = 0.2f)
+                                    else -> NovaNeonBlue.copy(alpha = 0.2f)
+                                }
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = if (isVpnActive) NovaNeonGreen else NovaNeonBlue,
+                            tint = when {
+                                isVpnConnected -> NovaNeonGreen
+                                isVpnConnecting -> NovaNeonCyan
+                                vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTION_FAILED -> Color(0xFFFF5252)
+                                else -> NovaNeonBlue
+                            },
                             modifier = Modifier.size(20.dp)
                         )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                        Text(text = "Android VPN Service", color = NovaTextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text(text = "Android VPN Engine", color = NovaTextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (isVpnActive) "Connected (Encrypted Tunnel Active)" else vpnStatusText,
-                            color = if (isVpnActive) NovaNeonGreen else NovaTextGray,
-                            fontSize = 11.sp
+                            text = vpnTelemetry.state.displayName,
+                            color = when {
+                                isVpnConnected -> NovaNeonGreen
+                                isVpnConnecting -> NovaNeonCyan
+                                vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTION_FAILED -> Color(0xFFFF5252)
+                                else -> NovaTextGray
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
@@ -264,9 +284,15 @@ fun NetworkVpnScreen(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(16.dp))
-                        .background(if (isVpnActive) Color(0xFFFF5252) else NovaNeonBlue)
-                        .clickable {
-                            if (isVpnActive) {
+                        .background(
+                            when {
+                                isVpnConnected -> Color(0xFFFF5252)
+                                isVpnConnecting -> Color(0xFF334155)
+                                else -> NovaNeonBlue
+                            }
+                        )
+                        .clickable(enabled = !isVpnConnecting) {
+                            if (isVpnConnected) {
                                 viewModel.requestVpnDisconnect()
                             } else {
                                 showVpnConfigDialog = true
@@ -275,12 +301,67 @@ fun NetworkVpnScreen(
                         .padding(horizontal = 14.dp, vertical = 7.dp)
                 ) {
                     Text(
-                        text = if (isVpnActive) "Disconnect" else "Configure & Connect",
+                        text = when {
+                            isVpnConnected -> "Disconnect"
+                            isVpnConnecting -> "Connecting..."
+                            else -> "Configure & Connect"
+                        },
                         color = Color.White,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
+            }
+
+            // Expanded telemetry details when connected or failed
+            if (isVpnConnected) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Endpoint: ${vpnTelemetry.endpointHost}:${vpnTelemetry.endpointPort}",
+                        color = NovaTextWhite,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "Time: ${com.example.core.util.FormatUtils.formatDurationSeconds(vpnTelemetry.durationSeconds)}",
+                        color = NovaNeonCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Latency: ${if (vpnTelemetry.endpointLatencyMs >= 0) "${vpnTelemetry.endpointLatencyMs} ms" else "--"}",
+                        color = NovaTextGray,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "Status: ${vpnTelemetry.handshakeStatus}",
+                        color = NovaNeonGreen,
+                        fontSize = 11.sp
+                    )
+                }
+            } else if (vpnTelemetry.state == com.example.services.VpnConnectionState.CONNECTION_FAILED && vpnTelemetry.errorDetails != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "• ${vpnTelemetry.errorDetails}",
+                    color = Color(0xFFFF8A80),
+                    fontSize = 11.sp
+                )
+            } else if (vpnTelemetry.state == com.example.services.VpnConnectionState.NOT_CONFIGURED) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "No remote server configured. A valid host and listening VPN port are required to establish an encrypted tunnel.",
+                    color = NovaTextGray,
+                    fontSize = 11.sp
+                )
             }
         }
 

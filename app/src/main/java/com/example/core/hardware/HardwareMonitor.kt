@@ -29,6 +29,7 @@ data class RamInfo(
     val availableBytes: Long,
     val usedBytes: Long,
     val usagePercentage: Int,
+    val isPhysicalRamAvailable: Boolean = true,
     val isLowMemory: Boolean,
     val thresholdBytes: Long,
     val processUsedBytes: Long,
@@ -37,6 +38,7 @@ data class RamInfo(
     val swapFreeBytes: Long,
     val zRamAccessible: Boolean,
     val zRamUsageString: String,
+    val zRamCapacityBytes: Long = 0L,
     val swapSourceType: String,
     val swapSupportStatus: String
 )
@@ -100,6 +102,7 @@ class HardwareMonitor(private val context: Context) {
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
 
+    private val cpuLock = Any()
     private var lastCpuTotalJiffies: Long = 0L
     private var lastCpuWorkJiffies: Long = 0L
 
@@ -112,28 +115,15 @@ class HardwareMonitor(private val context: Context) {
         activityManager?.getMemoryInfo(memInfo)
 
         var total = memInfo.totalMem
-        if (total <= 0L) {
-            total = Runtime.getRuntime().maxMemory()
-        }
         var avail = memInfo.availMem
-        if (avail <= 0L) {
-            avail = Runtime.getRuntime().freeMemory()
-        }
-        val used = (total - avail).coerceAtLeast(0L)
-        val usagePct = if (total > 0) ((used.toDouble() / total) * 100).toInt() else 0
 
-        // NovaBoost process memory footprint
-        val runtimeUsed = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()
-
-        // Parse Linux /proc/meminfo for Swap, zRAM, and Cached buffers
+        // Parse Linux /proc/meminfo for secondary verification, swap, zRAM, and buffers
         var swapTotal = 0L
         var swapFree = 0L
         var cached = 0L
         var buffers = 0L
-        var zramActiveFound = false
-        var zramUsageStr = "zRAM information unavailable on this device"
-        var swapSource = "Not detected or protected by kernel"
-        var swapStatus = "Kernel Restricted"
+        var procMemTotal = 0L
+        var procMemAvailable = 0L
 
         try {
             val meminfoFile = File("/proc/meminfo")
@@ -145,32 +135,58 @@ class HardwareMonitor(private val context: Context) {
                         val valueStr = parts[1].split("\\s+".toRegex())[0]
                         val kbVal = valueStr.toLongOrNull() ?: 0L
                         when (key) {
+                            "MemTotal" -> procMemTotal = kbVal * 1024L
+                            "MemAvailable" -> procMemAvailable = kbVal * 1024L
                             "SwapTotal" -> swapTotal = kbVal * 1024L
                             "SwapFree" -> swapFree = kbVal * 1024L
                             "Cached" -> cached = kbVal * 1024L
                             "Buffers" -> buffers = kbVal * 1024L
-                            "ZRam", "Zswap" -> {
-                                zramActiveFound = true
-                                zramUsageStr = "${kbVal / 1024} MB (active)"
-                            }
                         }
                     }
                 }
             }
-        } catch (_: Exception) {
-            // Protected on some OEM SELinux policies
+        } catch (_: Exception) {}
+
+        // Fallback to /proc/meminfo if ActivityManager reported 0, but NEVER substitute application heap!
+        if (total <= 0L && procMemTotal > 0L) {
+            total = procMemTotal
+        }
+        if (avail <= 0L && procMemAvailable > 0L) {
+            avail = procMemAvailable
         }
 
-        // Check /proc/swaps if accessible
+        val isRamValid = total > 0L
+        val used = if (isRamValid) (total - avail).coerceAtLeast(0L) else 0L
+        val usagePct = if (isRamValid) ((used.toDouble() / total) * 100).toInt().coerceIn(0, 100) else 0
+
+        // NovaBoost process memory footprint (application heap - reported separately, NEVER as system RAM)
+        val runtimeUsed = (Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()).coerceAtLeast(0L)
+
+        // Read zRAM block device disksize if accessible
+        var zramConfiguredBytes = 0L
+        try {
+            val zramDiskSizeFile = File("/sys/block/zram0/disksize")
+            if (zramDiskSizeFile.exists() && zramDiskSizeFile.canRead()) {
+                zramConfiguredBytes = zramDiskSizeFile.readText().trim().toLongOrNull() ?: 0L
+            }
+        } catch (_: Exception) {}
+
+        // Verify active swap entries in /proc/swaps
+        var zramActiveInSwaps = false
+        var partitionActiveInSwaps = false
+        var swapSource = "Not detected or protected by kernel"
+        var swapStatus = "Kernel Restricted"
+
         try {
             val swapsFile = File("/proc/swaps")
             if (swapsFile.exists() && swapsFile.canRead()) {
                 swapsFile.forEachLine { line ->
                     if (line.contains("zram", ignoreCase = true)) {
-                        zramActiveFound = true
-                        swapSource = "Linux zRAM (Compressed In-Memory)"
+                        zramActiveInSwaps = true
+                        swapSource = "Linux zRAM (In-Memory Compression)"
                         swapStatus = "Active (zRAM)"
                     } else if (line.contains("partition", ignoreCase = true) || line.contains("file", ignoreCase = true)) {
+                        partitionActiveInSwaps = true
                         swapSource = "Storage-backed Swap Partition"
                         swapStatus = "Active (Partition)"
                     }
@@ -178,23 +194,32 @@ class HardwareMonitor(private val context: Context) {
             }
         } catch (_: Exception) {}
 
-        if (swapTotal > 0) {
-            val swapUsed = swapTotal - swapFree
-            if (swapSource == "Not detected or protected by kernel") {
-                // Determine whether it is zRAM or partition
-                if (File("/sys/block/zram0").exists()) {
-                    zramActiveFound = true
-                    swapSource = "Linux zRAM (/sys/block/zram0)"
-                    swapStatus = "Active"
-                } else {
-                    swapSource = "System Swap"
-                    swapStatus = "Active"
-                }
+        val zramAccessible = zramActiveInSwaps || (zramConfiguredBytes > 0L)
+        val zramUsageStr: String
+
+        if (swapTotal > 0L) {
+            val swapUsed = (swapTotal - swapFree).coerceAtLeast(0L)
+            if (zramActiveInSwaps) {
+                swapSource = "Linux zRAM (Compressed In-Memory)"
+                swapStatus = "Active (zRAM)"
+                zramUsageStr = "zRAM: ${swapTotal / (1024 * 1024)} MB total (${swapUsed / (1024 * 1024)} MB used)"
+            } else if (partitionActiveInSwaps) {
+                swapSource = "Storage-backed Swap"
+                swapStatus = "Active (Storage)"
+                zramUsageStr = "Swap Partition: ${swapTotal / (1024 * 1024)} MB (${swapUsed / (1024 * 1024)} MB used)"
+            } else {
+                swapSource = "System Swap Device"
+                swapStatus = "Active (System)"
+                zramUsageStr = "System Swap: ${swapTotal / (1024 * 1024)} MB (${swapUsed / (1024 * 1024)} MB used)"
             }
-            zramUsageStr = "Total: ${swapTotal / (1024 * 1024)} MB | Active: ${swapUsed / (1024 * 1024)} MB"
+        } else if (zramConfiguredBytes > 0L) {
+            swapSource = "zRAM Configured (${zramConfiguredBytes / (1024 * 1024)} MB)"
+            swapStatus = "Device Present (Swapon Restricted)"
+            zramUsageStr = "${zramConfiguredBytes / (1024 * 1024)} MB configured in kernel"
         } else {
             swapSource = "STORAGE SWAP ACTIVATION: NOT AVAILABLE (Requires Root / Kernel Privilege)"
             swapStatus = "Not Active"
+            zramUsageStr = "No active swap detected"
         }
 
         return RamInfo(
@@ -202,14 +227,16 @@ class HardwareMonitor(private val context: Context) {
             availableBytes = avail,
             usedBytes = used,
             usagePercentage = usagePct,
+            isPhysicalRamAvailable = isRamValid,
             isLowMemory = memInfo.lowMemory,
             thresholdBytes = memInfo.threshold,
-            processUsedBytes = runtimeUsed.coerceAtLeast(0L),
+            processUsedBytes = runtimeUsed,
             cachedBytes = cached + buffers,
             swapTotalBytes = swapTotal,
             swapFreeBytes = swapFree,
-            zRamAccessible = zramActiveFound,
+            zRamAccessible = zramAccessible,
             zRamUsageString = zramUsageStr,
+            zRamCapacityBytes = if (zramActiveInSwaps && swapTotal > 0L) swapTotal else zramConfiguredBytes,
             swapSourceType = swapSource,
             swapSupportStatus = swapStatus
         )
@@ -313,8 +340,8 @@ class HardwareMonitor(private val context: Context) {
         }
     }
 
-    private fun sampleProcStatCpuUsage(): Int? {
-        return try {
+    private fun sampleProcStatCpuUsage(): Int? = synchronized(cpuLock) {
+        try {
             val reader = RandomAccessFile("/proc/stat", "r")
             val line = reader.readLine() ?: return null
             reader.close()
@@ -338,7 +365,7 @@ class HardwareMonitor(private val context: Context) {
             lastCpuTotalJiffies = total
             lastCpuWorkJiffies = work
 
-            if (deltaTotal > 0 && lastCpuTotalJiffies > 0) {
+            if (deltaTotal > 0 && deltaWork >= 0 && lastCpuTotalJiffies > 0) {
                 ((deltaWork.toDouble() / deltaTotal) * 100).toInt().coerceIn(0, 100)
             } else {
                 null
@@ -348,8 +375,8 @@ class HardwareMonitor(private val context: Context) {
         }
     }
 
-    private fun sampleProcessCpuUsage(coreCount: Int): Int {
-        return try {
+    private fun sampleProcessCpuUsage(coreCount: Int): Int = synchronized(cpuLock) {
+        try {
             val statFile = File("/proc/self/stat")
             if (!statFile.exists() || !statFile.canRead()) return 0
             val content = statFile.readText()

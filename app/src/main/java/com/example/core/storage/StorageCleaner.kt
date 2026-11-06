@@ -46,7 +46,8 @@ data class CleanExecutionResult(
     val itemsDeleted: Int,
     val failedCount: Int,
     val categoriesCleaned: List<CleanCategory>,
-    val isVerified: Boolean
+    val isVerified: Boolean,
+    val isPartialSuccess: Boolean = false
 )
 
 class StorageCleaner(private val context: Context) {
@@ -112,13 +113,15 @@ class StorageCleaner(private val context: Context) {
         addGroup(CleanCategory.OLD_DOWNLOADS, oldDownloadItems)
 
         val duration = System.currentTimeMillis() - startTime
-        val totalBytes = groups.sumOf { it.totalBytes }
-        val totalCount = groups.sumOf { it.items.size }
+        val allDiscoveredItems = (tempItems + duplicateItems + largeItems + emptyDirs + apkItems + oldDownloadItems)
+            .distinctBy { it.path }
+        val uniqueTotalBytes = allDiscoveredItems.sumOf { it.sizeBytes }
+        val uniqueTotalCount = allDiscoveredItems.size
 
         CleanScanResult(
             groups = groups,
-            totalBytesFound = totalBytes,
-            totalFilesFound = totalCount,
+            totalBytesFound = uniqueTotalBytes,
+            totalFilesFound = uniqueTotalCount,
             scanDurationMs = duration
         )
     }
@@ -298,7 +301,10 @@ class StorageCleaner(private val context: Context) {
         var failedCount = 0
         val affectedCategories = mutableSetOf<CleanCategory>()
 
-        for (item in itemsToDelete) {
+        // Canonical deduplication of deletion targets by path
+        val distinctItems = itemsToDelete.distinctBy { it.path }
+
+        for (item in distinctItems) {
             try {
                 val file = File(item.path)
                 // Re-verify existence and metadata before deletion
@@ -324,22 +330,18 @@ class StorageCleaner(private val context: Context) {
             }
         }
 
-        // Also purge NovaBoost's own volatile app cache
-        try {
-            context.cacheDir?.listFiles()?.forEach { f ->
-                val s = f.length()
-                if (f.deleteRecursively()) {
-                    freedBytes += s
-                }
-            }
-        } catch (_: Exception) {}
+        // NO hidden cache deletion: unselected app cache is NOT deleted silently.
+
+        val isFullyVerified = (failedCount == 0 && deletedCount > 0)
+        val isPartial = (failedCount > 0 && deletedCount > 0)
 
         CleanExecutionResult(
             bytesRecovered = freedBytes,
             itemsDeleted = deletedCount,
             failedCount = failedCount,
             categoriesCleaned = affectedCategories.toList(),
-            isVerified = true
+            isVerified = isFullyVerified,
+            isPartialSuccess = isPartial
         )
     }
 }

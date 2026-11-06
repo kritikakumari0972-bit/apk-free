@@ -185,11 +185,18 @@ class GamingSessionManager(
         }
 
         val isNetworkLagging = !ping.isSuccess || ping.latencyMs > 120
-        val netStatus = if (!ping.isSuccess) {
-            recs.add("High network ping or packet loss detected. Switch closer to Wi-Fi access point.")
-            "High Latency / Packet Drops"
-        } else {
-            "${ping.latencyMs} ms (Good)"
+        val netStatus = when {
+            !ping.isSuccess -> {
+                recs.add("Network probe failed (Connection timed out or unreachable). Check your active internet connection.")
+                "Connection Failed / Unreachable"
+            }
+            ping.latencyMs > 120 -> {
+                recs.add("Elevated network ping (${ping.latencyMs} ms). Connect to a 5 GHz Wi-Fi or lower-latency network to reduce input lag.")
+                "High Latency (${ping.latencyMs} ms)"
+            }
+            else -> {
+                "${ping.latencyMs} ms (Optimal)"
+            }
         }
 
         val storageCrit = storage.usagePercentage > 90

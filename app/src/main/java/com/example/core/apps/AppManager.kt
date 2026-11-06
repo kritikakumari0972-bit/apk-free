@@ -153,18 +153,19 @@ class AppManager(private val context: Context) {
 
     fun clearNovaBoostCache(): Long {
         var freed = 0L
+        val dirs = listOfNotNull(context.cacheDir, context.codeCacheDir, context.externalCacheDir)
         try {
-            context.cacheDir?.listFiles()?.forEach { file ->
-                freed += file.length()
-                file.deleteRecursively()
-            }
-            context.codeCacheDir?.listFiles()?.forEach { file ->
-                freed += file.length()
-                file.deleteRecursively()
-            }
-            context.externalCacheDir?.listFiles()?.forEach { file ->
-                freed += file.length()
-                file.deleteRecursively()
+            for (dir in dirs) {
+                dir.listFiles()?.forEach { file ->
+                    val size = if (file.isDirectory) {
+                        file.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+                    } else {
+                        file.length()
+                    }
+                    if (file.deleteRecursively()) {
+                        freed += size
+                    }
+                }
             }
         } catch (_: Exception) {}
         return freed

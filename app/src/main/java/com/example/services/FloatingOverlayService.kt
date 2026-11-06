@@ -214,9 +214,13 @@ class FloatingOverlayService : Service() {
         updateJob = serviceScope.launch {
             while (isActive) {
                 sessionSeconds += 2
-                val ram = hardwareMonitor.getRamInfo()
-                val bat = hardwareMonitor.getBatteryInfo()
-                val ping = networkDiagnostics.measureSocketPing()
+                val (ram, bat, ping) = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    Triple(
+                        hardwareMonitor.getRamInfo(),
+                        hardwareMonitor.getBatteryInfo(),
+                        networkDiagnostics.measureSocketPing()
+                    )
+                }
 
                 val root = overlayView as? LinearLayout
                 if (root != null && root.childCount >= 2) {

@@ -11,6 +11,7 @@ import android.opengl.GLES20
 import android.os.Build
 
 data class GpuDiagnostics(
+    val isProbeSuccessful: Boolean,
     val renderer: String,
     val vendor: String,
     val openGlVersion: String,
@@ -32,10 +33,11 @@ object GpuProbe {
     fun probeGpu(context: Context): GpuDiagnostics {
         cachedGpuInfo?.let { return it }
 
-        var renderer = "OpenGL ES (Querying hardware...)"
-        var vendor = "System Graphics"
-        var version = "OpenGL ES"
-        var maxTexture = 2048
+        var isSuccess = false
+        var renderer = "Unavailable (EGL Query Failed)"
+        var vendor = "Unavailable"
+        var version = "Unavailable"
+        var maxTexture = 0
         var extensionCount = 0
         val topExts = mutableListOf<String>()
         var astc = false
@@ -68,21 +70,28 @@ object GpuProbe {
                         val ctx: EGLContext = EGL14.eglCreateContext(dpy, configs[0], EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
 
                         if (EGL14.eglMakeCurrent(dpy, surface, surface, ctx)) {
-                            renderer = GLES20.glGetString(GLES20.GL_RENDERER) ?: renderer
-                            vendor = GLES20.glGetString(GLES20.GL_VENDOR) ?: vendor
-                            version = GLES20.glGetString(GLES20.GL_VERSION) ?: version
+                            val r = GLES20.glGetString(GLES20.GL_RENDERER)
+                            val v = GLES20.glGetString(GLES20.GL_VENDOR)
+                            val ver = GLES20.glGetString(GLES20.GL_VERSION)
 
-                            val maxTex = IntArray(1)
-                            GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTex, 0)
-                            if (maxTex[0] > 0) maxTexture = maxTex[0]
+                            if (!r.isNullOrBlank()) {
+                                renderer = r
+                                vendor = v ?: "Generic GPU Vendor"
+                                version = ver ?: "OpenGL ES 2.0"
+                                isSuccess = true
 
-                            val exts = GLES20.glGetString(GLES20.GL_EXTENSIONS)
-                            if (!exts.isNullOrBlank()) {
-                                val allExt = exts.split("\\s+".toRegex())
-                                extensionCount = allExt.size
-                                astc = exts.contains("GL_KHR_texture_compression_astc", ignoreCase = true)
-                                etc2 = exts.contains("ETC2", ignoreCase = true) || version.contains("3.")
-                                topExts.addAll(allExt.take(6))
+                                val maxTex = IntArray(1)
+                                GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTex, 0)
+                                if (maxTex[0] > 0) maxTexture = maxTex[0]
+
+                                val exts = GLES20.glGetString(GLES20.GL_EXTENSIONS)
+                                if (!exts.isNullOrBlank()) {
+                                    val allExt = exts.split("\\s+".toRegex())
+                                    extensionCount = allExt.size
+                                    astc = exts.contains("GL_KHR_texture_compression_astc", ignoreCase = true)
+                                    etc2 = exts.contains("ETC2", ignoreCase = true) || version.contains("3.")
+                                    topExts.addAll(allExt.take(6))
+                                }
                             }
                         }
                         EGL14.eglMakeCurrent(dpy, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
@@ -93,7 +102,10 @@ object GpuProbe {
                 }
             }
         } catch (_: Throwable) {
-            renderer = "OpenGL ES (Driver probe restricted)"
+            renderer = "Unavailable (Driver probe restricted)"
+            vendor = "Unavailable"
+            version = "Unavailable"
+            isSuccess = false
         }
 
         // Check Vulkan Hardware Support
@@ -115,6 +127,7 @@ object GpuProbe {
         } catch (_: Throwable) {}
 
         val result = GpuDiagnostics(
+            isProbeSuccessful = isSuccess,
             renderer = renderer,
             vendor = vendor,
             openGlVersion = version,
@@ -126,7 +139,7 @@ object GpuProbe {
             astcSupported = astc,
             etc2Supported = etc2,
             realTimeLoadSupported = false,
-            realTimeLoadStatus = "REAL-TIME GPU UTILIZATION UNAVAILABLE (No driver telemetry exposed)"
+            realTimeLoadStatus = "REAL-TIME GPU UTILIZATION UNAVAILABLE (No unprivileged driver telemetry exposed)"
         )
         cachedGpuInfo = result
         return result

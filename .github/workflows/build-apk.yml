@@ -83,25 +83,40 @@ jobs:
           chmod +x ./gradlew
 
       - name: Prepare Signing Keys and Environment Files
+        env:
+          SECRET_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          SECRET_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          SECRET_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           echo "=== Setting up Release Keystore and Environment ==="
           
-          # Configure Release Keystore for assembleRelease
           RELEASE_KEYSTORE="$GITHUB_WORKSPACE/release.keystore"
-          RELEASE_PASS="novaboostreleasepass"
+          
+          if [ -n "$SECRET_STORE_PASSWORD" ]; then
+            RELEASE_PASS="$SECRET_STORE_PASSWORD"
+            KEY_PASS="${SECRET_KEY_PASSWORD:-$SECRET_STORE_PASSWORD}"
+          else
+            RELEASE_PASS="novaboostreleasepass"
+            KEY_PASS="novaboostreleasepass"
+          fi
           
           echo "KEYSTORE_PATH=$RELEASE_KEYSTORE" >> $GITHUB_ENV
           echo "STORE_PASSWORD=$RELEASE_PASS" >> $GITHUB_ENV
-          echo "KEY_PASSWORD=$RELEASE_PASS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASS" >> $GITHUB_ENV
           
-          # Generate production-ready 2048-bit RSA signing key if not present
+          if [ -n "$SECRET_KEYSTORE_BASE64" ]; then
+            echo "Decoding release keystore from repository secrets..."
+            echo "$SECRET_KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > "$RELEASE_KEYSTORE"
+          fi
+          
+          # Generate production-ready 2048-bit RSA signing key if not present or empty
           if [ ! -s "$RELEASE_KEYSTORE" ]; then
             echo "Generating fresh self-signed release keystore for NovaBoost..."
             keytool -genkeypair -v \
               -keystore "$RELEASE_KEYSTORE" \
               -storepass "$RELEASE_PASS" \
               -alias upload \
-              -keypass "$RELEASE_PASS" \
+              -keypass "$KEY_PASS" \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \

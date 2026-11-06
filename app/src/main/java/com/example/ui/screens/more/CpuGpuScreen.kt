@@ -284,8 +284,8 @@ fun CpuGpuScreen(
                     Text(text = "• Telemetry Mode: ${cpu.cpuUsageMode}", color = NovaTextGray, fontSize = 11.sp)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(text = "• GPU Vendor: ${gpu.vendor}", color = NovaTextWhite, fontSize = 12.sp)
-                    Text(text = "• OpenGL Version: ${gpu.openGlVersion}", color = NovaTextWhite, fontSize = 12.sp)
-                    Text(text = "• Max Texture Dimension: ${gpu.maxTextureSize} px", color = NovaTextWhite, fontSize = 12.sp)
+                    val texStr = if (gpu.maxTextureSize > 0) "${gpu.maxTextureSize} px" else "Unavailable (EGL Query Failed)"
+                    Text(text = "• Max Texture Dimension: $texStr", color = NovaTextWhite, fontSize = 12.sp)
                     Text(text = "• Vulkan Level: ${gpu.vulkanLevel}", color = NovaTextWhite, fontSize = 12.sp)
                     Text(text = "• ASTC Compression: ${if (gpu.astcSupported) "Supported" else "No"}", color = NovaTextGray, fontSize = 11.sp)
                 }

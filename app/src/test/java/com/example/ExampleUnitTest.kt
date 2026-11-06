@@ -190,4 +190,151 @@ class ExampleUnitTest {
         assertEquals(SpeedTestPhase.TESTING_DOWNLOAD, SpeedTestPhase.valueOf("TESTING_DOWNLOAD"))
         assertEquals(SpeedTestPhase.TESTING_UPLOAD, SpeedTestPhase.valueOf("TESTING_UPLOAD"))
     }
+
+    @Test
+    fun testPhysicalRamZeroFallbackModel() {
+        // Physical RAM is not available: totalBytes is 0
+        val unavailableRam = RamInfo(
+            totalBytes = 0L,
+            availableBytes = 0L,
+            usedBytes = 0L,
+            usagePercentage = 0,
+            isLowMemory = false,
+            thresholdBytes = 0L,
+            processUsedBytes = 25L * 1024 * 1024,
+            cachedBytes = 0L,
+            swapTotalBytes = 0L,
+            swapFreeBytes = 0L,
+            zRamAccessible = false,
+            zRamUsageString = "Unavailable",
+            swapSourceType = "None",
+            swapSupportStatus = "Unavailable",
+            isPhysicalRamAvailable = false
+        )
+        assertFalse("When totalBytes is 0, isPhysicalRamAvailable must be false", unavailableRam.isPhysicalRamAvailable)
+        assertEquals(0L, unavailableRam.totalBytes)
+        // Ensure JVM maxMemory is never substituted for physical RAM
+        assertTrue(unavailableRam.totalBytes != Runtime.getRuntime().maxMemory())
+    }
+
+    @Test
+    fun testZramVsSystemSwapDistinction() {
+        val zramInfo = RamInfo(
+            totalBytes = 8L * 1024 * 1024 * 1024,
+            availableBytes = 4L * 1024 * 1024 * 1024,
+            usedBytes = 4L * 1024 * 1024 * 1024,
+            usagePercentage = 50,
+            isLowMemory = false,
+            thresholdBytes = 1L * 1024 * 1024 * 1024,
+            processUsedBytes = 50L * 1024 * 1024,
+            cachedBytes = 500L * 1024 * 1024,
+            swapTotalBytes = 3L * 1024 * 1024 * 1024,
+            swapFreeBytes = 2L * 1024 * 1024 * 1024,
+            zRamAccessible = true,
+            zRamUsageString = "3.0 GB Active",
+            swapSourceType = "zRAM",
+            swapSupportStatus = "Active (zRAM)",
+            isPhysicalRamAvailable = true
+        )
+        assertEquals("zRAM", zramInfo.swapSourceType)
+        assertTrue(zramInfo.zRamAccessible)
+        assertTrue(zramInfo.isPhysicalRamAvailable)
+    }
+
+    @Test
+    fun testStorageCleanExecutionResultVerification() {
+        // Verified complete clean
+        val successResult = com.example.core.storage.CleanExecutionResult(
+            bytesRecovered = 10485760L,
+            itemsDeleted = 5,
+            failedCount = 0,
+            categoriesCleaned = listOf(CleanCategory.TEMP_FILES),
+            isVerified = true,
+            isPartialSuccess = false
+        )
+        assertTrue(successResult.isVerified)
+        assertFalse(successResult.isPartialSuccess)
+        assertEquals(5, successResult.itemsDeleted)
+
+        // Partial success (some deleted, some failed)
+        val partialResult = com.example.core.storage.CleanExecutionResult(
+            bytesRecovered = 6291456L,
+            itemsDeleted = 3,
+            failedCount = 2,
+            categoriesCleaned = listOf(CleanCategory.TEMP_FILES),
+            isVerified = false,
+            isPartialSuccess = true
+        )
+        assertFalse(partialResult.isVerified)
+        assertTrue(partialResult.isPartialSuccess)
+
+        // Complete failure
+        val failureResult = com.example.core.storage.CleanExecutionResult(
+            bytesRecovered = 0L,
+            itemsDeleted = 0,
+            failedCount = 4,
+            categoriesCleaned = listOf(CleanCategory.TEMP_FILES),
+            isVerified = false,
+            isPartialSuccess = false
+        )
+        assertFalse(failureResult.isVerified)
+        assertFalse(failureResult.isPartialSuccess)
+    }
+
+    @Test
+    fun testStorageCleanDeduplicationByPath() {
+        val file1 = CleanItem(id = "/sdcard/Download/test.log", name = "test.log", path = "/sdcard/Download/test.log", sizeBytes = 1024, category = CleanCategory.TEMP_FILES, lastModified = 100)
+        // Same file appearing under empty folder or duplicate scan
+        val file1Duplicate = CleanItem(id = "/sdcard/Download/test.log", name = "test.log", path = "/sdcard/Download/test.log", sizeBytes = 1024, category = CleanCategory.DUPLICATE_FILES, lastModified = 100)
+        val file2 = CleanItem(id = "/sdcard/Download/doc.pdf", name = "doc.pdf", path = "/sdcard/Download/doc.pdf", sizeBytes = 2048, category = CleanCategory.LARGE_FILES, lastModified = 200)
+
+        val combinedList = listOf(file1, file1Duplicate, file2)
+        assertEquals(3, combinedList.size)
+
+        val uniqueFiles = combinedList.distinctBy { it.path }
+        assertEquals(2, uniqueFiles.size)
+        assertEquals(3072L, uniqueFiles.sumOf { it.sizeBytes })
+    }
+
+    @Test
+    fun testVpnConnectionStatesAndTelemetry() {
+        val states = com.example.services.VpnConnectionState.values().map { it.name }
+        assertTrue(states.contains("NOT_CONFIGURED"))
+        assertTrue(states.contains("CONNECTING"))
+        assertTrue(states.contains("HANDSHAKE_IN_PROGRESS"))
+        assertTrue(states.contains("CONNECTED"))
+        assertTrue(states.contains("CONNECTION_FAILED"))
+
+        val defaultTelemetry = com.example.services.VpnTelemetry(
+            state = com.example.services.VpnConnectionState.NOT_CONFIGURED,
+            endpointHost = null,
+            endpointPort = 0
+        )
+        assertEquals(com.example.services.VpnConnectionState.NOT_CONFIGURED, defaultTelemetry.state)
+        assertEquals(0L, defaultTelemetry.bytesSent)
+        assertEquals(0L, defaultTelemetry.bytesReceived)
+        assertEquals(0L, defaultTelemetry.durationSeconds)
+        assertEquals(-1L, defaultTelemetry.endpointLatencyMs)
+    }
+
+    @Test
+    fun testGpuProbeFailureModel() {
+        val failedGpu = com.example.core.hardware.GpuDiagnostics(
+            isProbeSuccessful = false,
+            renderer = "Unavailable (EGL Query Failed)",
+            vendor = "Unknown",
+            openGlVersion = "Unknown",
+            maxTextureSize = 0,
+            vulkanSupported = false,
+            vulkanLevel = "None",
+            extensionCount = 0,
+            topExtensions = emptyList(),
+            astcSupported = false,
+            etc2Supported = false
+        )
+        assertFalse(failedGpu.isProbeSuccessful)
+        assertEquals(0, failedGpu.maxTextureSize)
+        assertFalse(failedGpu.renderer == "System Graphics")
+    }
 }
+

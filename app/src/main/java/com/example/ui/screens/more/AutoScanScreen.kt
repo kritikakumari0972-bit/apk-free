@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -121,12 +122,38 @@ fun AutoScanScreen(
                             fontSize = 11.sp
                         )
                     }
-                    NovaButton(
-                        text = if (autoScanReport?.isScanning == true) "Scanning..." else "Run Auto Scan",
-                        onClick = { viewModel.runAutoScan() },
-                        testTag = "execute_auto_scan_button",
-                        icon = if (autoScanReport?.isScanning == true) null else Icons.Default.Speed,
-                        enabled = autoScanReport?.isScanning != true
+                    if (autoScanReport?.isScanning == true) {
+                        NovaButton(
+                            text = "Cancel Scan",
+                            onClick = { viewModel.cancelAutoScan() },
+                            testTag = "cancel_auto_scan_button"
+                        )
+                    } else {
+                        NovaButton(
+                            text = if (autoScanReport != null) "Re-Scan Subsystems" else "Run Auto Scan",
+                            onClick = { viewModel.runAutoScan() },
+                            testTag = "execute_auto_scan_button",
+                            icon = Icons.Default.Speed
+                        )
+                    }
+                }
+
+                if (autoScanReport?.isScanning == true) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { (autoScanReport?.progressPercent ?: 0) / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = NovaElectricBlue,
+                        trackColor = NovaBorder
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Auditing Subsystem ${((autoScanReport?.progressPercent ?: 0) * 12) / 100} of 12 (${autoScanReport?.progressPercent}%)",
+                        color = NovaTextSecondary,
+                        fontSize = 11.sp
                     )
                 }
 

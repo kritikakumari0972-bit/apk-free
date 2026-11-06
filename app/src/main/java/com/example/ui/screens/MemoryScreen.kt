@@ -281,7 +281,11 @@ fun MemoryScreen(
             onClick = {
                 val freed = viewModel.purgeNovaBoostMemoryCache()
                 val kb = freed / 1024
-                optimizedMessage = "Diagnostic complete: Trimmed ${kb.coerceAtLeast(32)} KB internal buffer. System GC requested."
+                optimizedMessage = if (kb > 0) {
+                    "Diagnostic complete: Trimmed ${kb} KB internal app buffer. System GC requested."
+                } else {
+                    "Diagnostic complete: Memory buffer clean. System GC requested."
+                }
             },
             testTag = "optimize_memory_button"
         )
