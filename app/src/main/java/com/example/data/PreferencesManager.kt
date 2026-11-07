@@ -23,6 +23,8 @@ class PreferencesManager(private val context: Context) {
         val KEY_DND_GAMING = booleanPreferencesKey("gaming_dnd_enabled")
         val KEY_DARK_THEME = booleanPreferencesKey("app_dark_theme")
         val KEY_CUSTOM_GAMES = stringPreferencesKey("custom_games_list")
+        val KEY_BATTERY_PROFILE = stringPreferencesKey("battery_profile_mode")
+        val KEY_GAMING_PROFILE = stringPreferencesKey("gaming_profile_mode")
     }
 
     val tempThresholdFlow: Flow<Float> = context.dataStore.data.map { prefs ->
@@ -68,6 +70,22 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setDarkTheme(value: Boolean) {
         context.dataStore.edit { it[KEY_DARK_THEME] = value }
+    }
+
+    val batteryProfileFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_BATTERY_PROFILE] ?: "Balanced"
+    }
+
+    val gamingProfileFlow: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_GAMING_PROFILE] ?: "Balanced Gaming"
+    }
+
+    suspend fun setBatteryProfile(profile: String) {
+        context.dataStore.edit { it[KEY_BATTERY_PROFILE] = profile }
+    }
+
+    suspend fun setGamingProfile(profile: String) {
+        context.dataStore.edit { it[KEY_GAMING_PROFILE] = profile }
     }
 
     suspend fun addCustomGame(packageName: String) {

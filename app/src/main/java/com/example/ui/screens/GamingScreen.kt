@@ -86,6 +86,12 @@ fun GamingScreen(
     var showMyGamesDialog by remember { mutableStateOf(false) }
     var actionToast by remember { mutableStateOf<String?>(null) }
 
+    var showProfileDialog by remember { mutableStateOf(false) }
+    val currentGamingProfile by viewModel.gamingProfile.collectAsState()
+    val displayInfo by viewModel.displayInfo.collectAsState()
+    val endedSessionReport by viewModel.lastEndedSessionReport.collectAsState()
+    val lagReport by viewModel.lagDiagnosticReport.collectAsState()
+
     val myGames = remember(installedApps, customGamePackages) {
         installedApps.filter { it.isGame || customGamePackages.contains(it.packageName) }
     }
@@ -122,16 +128,13 @@ fun GamingScreen(
                 .border(1.dp, NovaNeonPurple.copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
             contentAlignment = Alignment.Center
         ) {
-            // Cyberpunk Armored Helmet & Visor Canvas Illustration
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val cx = size.width / 2f
                 val cy = size.height / 2f + 10f
 
-                // Outer neon flare rays
                 drawLine(NovaNeonPurple.copy(alpha = 0.5f), Offset(cx, cy), Offset(cx - 150f, cy - 80f), strokeWidth = 3f)
                 drawLine(NovaNeonCyan.copy(alpha = 0.5f), Offset(cx, cy), Offset(cx + 150f, cy - 80f), strokeWidth = 3f)
 
-                // Cyber Armor Shoulder Plates
                 val armorPath = Path().apply {
                     moveTo(cx - 80f, cy + 60f)
                     lineTo(cx - 110f, cy + 90f)
@@ -144,7 +147,6 @@ fun GamingScreen(
                 }
                 drawPath(armorPath, Brush.linearGradient(listOf(NovaNeonPurple, NovaNeonBlue)))
 
-                // Helmet Core Silhouette
                 drawCircle(
                     brush = Brush.radialGradient(
                         listOf(Color(0xFF1E284A), Color(0xFF0D1426)),
@@ -155,7 +157,6 @@ fun GamingScreen(
                     center = Offset(cx, cy - 10f)
                 )
 
-                // Neon Glowing Visor (Cyan to Magenta gradient horizontal bar)
                 drawRoundRect(
                     brush = Brush.horizontalGradient(
                         listOf(NovaNeonCyan, Color(0xFFE040FB), NovaNeonCyan)
@@ -188,12 +189,12 @@ fun GamingScreen(
             GamingToolCard(
                 icon = Icons.Default.Speed,
                 title = "Game Booster",
-                subtitle = "Boost FPS",
+                subtitle = "Trim RAM",
                 iconColor = NovaNeonCyan,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    viewModel.purgeNovaBoostMemoryCache()
-                    actionToast = "Game Booster activated: Background RAM trimmed."
+                    val freed = viewModel.purgeNovaBoostMemoryCache()
+                    actionToast = if (freed > 0) "Game Booster: ${freed / 1024} KB internal buffer cleared." else "Game Booster: Buffer clean. GC requested."
                 }
             )
 
@@ -201,12 +202,12 @@ fun GamingScreen(
             GamingToolCard(
                 icon = Icons.Default.Adjust,
                 title = "Lag Reducer",
-                subtitle = "Fix Lag",
+                subtitle = "Diagnose Lag",
                 iconColor = Color(0xFFFF4081),
                 modifier = Modifier.weight(1f),
                 onClick = {
                     viewModel.runLagDiagnostics()
-                    actionToast = "Lag reduction diagnostics completed."
+                    actionToast = "Lag diagnostics completed below."
                 }
             )
         }
@@ -221,7 +222,7 @@ fun GamingScreen(
             GamingToolCard(
                 icon = Icons.Default.Layers,
                 title = "Gaming Overlay",
-                subtitle = "Live Monitor",
+                subtitle = "Live HUD",
                 iconColor = NovaNeonCyan,
                 modifier = Modifier.weight(1f),
                 onClick = {
@@ -247,11 +248,11 @@ fun GamingScreen(
             GamingToolCard(
                 icon = Icons.Default.Tune,
                 title = "Game Profiles",
-                subtitle = "Custom Mode",
+                subtitle = currentGamingProfile.take(12),
                 iconColor = NovaNeonYellow,
                 modifier = Modifier.weight(1f),
                 onClick = {
-                    actionToast = "Performance Mode profile engaged."
+                    showProfileDialog = true
                 }
             )
         }
@@ -263,26 +264,75 @@ fun GamingScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Gaming Session Card (00:45:32 Active)
-        NeonCard(borderColor = NovaNeonGreen.copy(alpha = 0.35f)) {
+        // FPS & Display Refresh Rate Diagnostics Card (Section 14)
+        NeonCard {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text(
+                        text = "Display & Frame Diagnostics",
+                        color = NovaTextWhite,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Native Refresh: ${displayInfo.refreshRateHz.toInt()} Hz (${displayInfo.resolution})",
+                        color = NovaNeonCyan,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(NovaNeonBlue.copy(alpha = 0.2f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "${displayInfo.refreshRateHz.toInt()} FPS Cap",
+                        color = NovaNeonCyan,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "FPS DATA UNAVAILABLE for third-party games (Android OS protects external graphics pipelines from unauthorized profiling). NovaBoost provides display hardware refresh diagnostics instead of fabricated readings.",
+                color = NovaTextGray,
+                fontSize = 10.sp,
+                lineHeight = 14.sp
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Gaming Session Card (00:45:32 Active)
+        NeonCard(borderColor = if (activeSession != null) NovaNeonGreen.copy(alpha = 0.45f) else NovaCardBorder) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(NovaNeonGreen.copy(alpha = 0.15f)),
+                            .background(if (activeSession != null) NovaNeonGreen.copy(alpha = 0.15f) else NovaNeonBlue.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = NovaNeonGreen, modifier = Modifier.size(20.dp))
+                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = if (activeSession != null) NovaNeonGreen else NovaNeonCyan, modifier = Modifier.size(20.dp))
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                        Text(text = "Gaming Session", color = NovaTextGray, fontSize = 11.sp)
+                        val sessionTitle = activeSession?.let { "${it.gameName} (${it.profileName})" } ?: "Gaming Session"
+                        Text(text = sessionTitle, color = NovaTextGray, fontSize = 11.sp)
                         val duration = activeSession?.durationSeconds ?: 0L
                         val mins = duration / 60
                         val secs = duration % 60
@@ -296,21 +346,45 @@ fun GamingScreen(
                     }
                 }
 
-                val isRunning = activeSession != null
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (isRunning) NovaNeonGreen else NovaNeonCyan)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isRunning) "Active" else "Standby",
-                        color = if (isRunning) NovaNeonGreen else NovaNeonCyan,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                if (activeSession != null) {
+                    TextButton(
+                        onClick = { viewModel.stopGameSession() },
+                        modifier = Modifier.testTag("stop_gaming_session_button")
+                    ) {
+                        Text("Stop Session", color = Color(0xFFFF5252), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(NovaNeonCyan)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Standby",
+                            color = NovaNeonCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        if (lagReport != null) {
+            Spacer(modifier = Modifier.height(14.dp))
+            NeonCard {
+                Text(text = "Lag Diagnostic Report", color = NovaTextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(text = "• RAM: ${lagReport!!.memoryPressureStatus}", color = NovaTextGray, fontSize = 11.sp)
+                Text(text = "• Thermal: ${lagReport!!.thermalStatus}", color = NovaTextGray, fontSize = 11.sp)
+                Text(text = "• Network: ${lagReport!!.networkLatencyStatus}", color = NovaTextGray, fontSize = 11.sp)
+                Text(text = "• Storage: ${lagReport!!.storageHeadroomStatus}", color = NovaTextGray, fontSize = 11.sp)
+                if (lagReport!!.recommendations.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = "Action: ${lagReport!!.recommendations.first()}", color = NovaNeonYellow, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -351,6 +425,80 @@ fun GamingScreen(
             confirmButton = {
                 TextButton(onClick = { showMyGamesDialog = false }) {
                     Text("Close", color = NovaNeonCyan)
+                }
+            },
+            containerColor = NovaCardBg,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    if (showProfileDialog) {
+        val profiles = listOf("Performance Monitoring", "Balanced Gaming", "Battery-Conscious Gaming", "Thermal-Conscious Gaming")
+        AlertDialog(
+            onDismissRequest = { showProfileDialog = false },
+            title = {
+                Text(text = "Select Gaming Profile", color = NovaTextWhite, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    profiles.forEach { profile ->
+                        val isSelected = currentGamingProfile == profile
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) NovaNeonCyan.copy(alpha = 0.15f) else NovaCardBg)
+                                .border(1.dp, if (isSelected) NovaNeonCyan else NovaCardBorder, RoundedCornerShape(12.dp))
+                                .clickable {
+                                    viewModel.setGamingProfile(profile)
+                                    actionToast = "Engaged profile: $profile"
+                                    showProfileDialog = false
+                                }
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = profile,
+                                color = if (isSelected) NovaNeonCyan else NovaTextWhite,
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showProfileDialog = false }) {
+                    Text("Cancel", color = NovaNeonCyan)
+                }
+            },
+            containerColor = NovaCardBg,
+            shape = RoundedCornerShape(18.dp)
+        )
+    }
+
+    if (endedSessionReport != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSessionReport() },
+            title = {
+                Text(text = "Gaming Session Summary", color = NovaTextWhite, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(text = "Game: ${endedSessionReport!!.gameName}", color = NovaNeonCyan, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "Profile: ${endedSessionReport!!.profileName}", color = NovaTextGray, fontSize = 12.sp)
+                    val mins = endedSessionReport!!.durationSeconds / 60
+                    val secs = endedSessionReport!!.durationSeconds % 60
+                    Text(text = "Duration: %02d:%02d".format(mins, secs), color = NovaTextWhite, fontSize = 12.sp)
+                    Text(text = "Peak Temperature: ${"%.1f".format(endedSessionReport!!.peakTemperatureCelsius)}°C", color = if (endedSessionReport!!.peakTemperatureCelsius > 41f) Color(0xFFFF5252) else NovaNeonGreen, fontSize = 12.sp)
+                    Text(text = "Avg RAM Available: ${endedSessionReport!!.avgAvailableRamMb} MB", color = NovaTextWhite, fontSize = 12.sp)
+                    if (endedSessionReport!!.avgPingMs > 0) {
+                        Text(text = "Avg Ping: ${endedSessionReport!!.avgPingMs} ms", color = NovaTextWhite, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.dismissSessionReport() }) {
+                    Text("Done", color = NovaNeonGreen)
                 }
             },
             containerColor = NovaCardBg,

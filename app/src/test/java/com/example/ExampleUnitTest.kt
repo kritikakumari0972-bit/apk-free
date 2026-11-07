@@ -336,5 +336,50 @@ class ExampleUnitTest {
         assertEquals(0, failedGpu.maxTextureSize)
         assertFalse(failedGpu.renderer == "System Graphics")
     }
+
+    @Test
+    fun testPerformanceSnapshotRecordModel() {
+        val snapshot = com.example.data.PerformanceSnapshotRecord(
+            healthScore = 95,
+            ramUsagePercentage = 55,
+            ramAvailableMb = 3200L,
+            cpuUsagePercentage = 22,
+            batteryTempCelsius = 33.5f,
+            batteryLevel = 88,
+            storageUsagePercentage = 48
+        )
+        assertEquals(95, snapshot.healthScore)
+        assertEquals(55, snapshot.ramUsagePercentage)
+        assertEquals(3200L, snapshot.ramAvailableMb)
+        assertEquals(22, snapshot.cpuUsagePercentage)
+        assertEquals(33.5f, snapshot.batteryTempCelsius, 0.01f)
+        assertEquals(88, snapshot.batteryLevel)
+        assertEquals(48, snapshot.storageUsagePercentage)
+    }
+
+    @Test
+    fun testSmartScanRecordModel() {
+        val scan = com.example.data.SmartScanRecord(
+            stagesCompleted = 14,
+            healthScore = 92,
+            summary = "All hardware subsystems optimal"
+        )
+        assertEquals(14, scan.stagesCompleted)
+        assertEquals(92, scan.healthScore)
+        assertEquals("All hardware subsystems optimal", scan.summary)
+    }
+
+    @Test
+    fun testBatteryAndGamingProfilesModel() {
+        val batteryProfiles = listOf("Balanced", "Power Saving", "Gaming Battery", "Monitoring Efficient")
+        assertEquals(4, batteryProfiles.size)
+        assertTrue(batteryProfiles.contains("Power Saving"))
+        assertTrue(batteryProfiles.contains("Monitoring Efficient"))
+
+        val gamingProfiles = listOf("Performance Monitoring", "Balanced Gaming", "Battery-Conscious Gaming", "Thermal-Conscious Gaming")
+        assertEquals(4, gamingProfiles.size)
+        assertTrue(gamingProfiles.contains("Performance Monitoring"))
+        assertTrue(gamingProfiles.contains("Thermal-Conscious Gaming"))
+    }
 }
 

@@ -151,7 +151,7 @@ fun AutoScanScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Auditing Subsystem ${((autoScanReport?.progressPercent ?: 0) * 12) / 100} of 12 (${autoScanReport?.progressPercent}%)",
+                        text = "Auditing Subsystem ${(((autoScanReport?.progressPercent ?: 0) * 14) / 100).coerceIn(1, 14)} of 14 (${autoScanReport?.progressPercent}%)",
                         color = NovaTextSecondary,
                         fontSize = 11.sp
                     )

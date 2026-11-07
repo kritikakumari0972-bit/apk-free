@@ -39,6 +39,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.MemoryScreen
 import com.example.ui.screens.MoreDestination
 import com.example.ui.screens.MoreScreen
+import com.example.ui.screens.StartupSplashScreen
 import com.example.ui.theme.NovaBgDark
 import com.example.ui.theme.NovaBoostTheme
 import com.example.ui.theme.NovaCardBg
@@ -65,7 +66,16 @@ class MainActivity : ComponentActivity() {
             val isDark by mainViewModel.darkTheme.collectAsState()
 
             NovaBoostTheme(darkTheme = isDark) {
-                NovaBoostApp(viewModel = mainViewModel)
+                var showSplash by remember { mutableStateOf(true) }
+
+                if (showSplash) {
+                    StartupSplashScreen(
+                        viewModel = mainViewModel,
+                        onFinish = { showSplash = false }
+                    )
+                } else {
+                    NovaBoostApp(viewModel = mainViewModel)
+                }
             }
         }
     }
@@ -128,6 +138,21 @@ fun NovaBoostApp(viewModel: NovaMainViewModel) {
             when (selectedTab) {
                 MainTab.HOME -> HomeScreen(
                     viewModel = viewModel,
+                    onNavigateToCleaner = { selectedTab = MainTab.CLEANER },
+                    onNavigateToMemory = { selectedTab = MainTab.MEMORY },
+                    onNavigateToGaming = { selectedTab = MainTab.GAMING },
+                    onNavigateToAutoScan = {
+                        selectedTab = MainTab.MORE
+                        moreTargetDestination = MoreDestination.AUTO_SCAN
+                    },
+                    onNavigateToThermalGuard = {
+                        selectedTab = MainTab.MORE
+                        moreTargetDestination = MoreDestination.BATTERY_THERMAL
+                    },
+                    onNavigateToNetwork = {
+                        selectedTab = MainTab.MORE
+                        moreTargetDestination = MoreDestination.NETWORK_VPN
+                    },
                     onNavigateToSettings = {
                         selectedTab = MainTab.MORE
                         moreTargetDestination = MoreDestination.SETTINGS

@@ -3,6 +3,7 @@ package com.example.ui.screens.more
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -188,6 +189,123 @@ fun BatteryThermalScreen(
         val context = androidx.compose.ui.platform.LocalContext.current
         val powerManager = remember { context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager }
         val isSystemPowerSave = powerManager?.isPowerSaveMode == true
+
+        val currentProfile by viewModel.batteryProfile.collectAsState()
+
+        // Battery Optimization Profiles Card (Section 18)
+        NeonCard {
+            Text(
+                text = "Battery Optimization Profile",
+                color = NovaTextWhite,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Controls NovaBoost polling frequency & background telemetry to maximize battery endurance",
+                color = NovaTextGray,
+                fontSize = 11.sp
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val profiles = listOf("Balanced", "Power Saving", "Gaming Battery", "Monitoring Efficient")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                profiles.forEach { profile ->
+                    val isSelected = currentProfile == profile
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isSelected) NovaNeonGreen.copy(alpha = 0.15f) else NovaCardBg)
+                            .border(1.dp, if (isSelected) NovaNeonGreen else NovaCardBorder, RoundedCornerShape(12.dp))
+                            .clickable { viewModel.setBatteryProfile(profile) }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = profile,
+                                    color = if (isSelected) NovaNeonGreen else NovaTextWhite,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                val desc = when (profile) {
+                                    "Power Saving" -> "10s refresh • Suspends heavy polling & scans"
+                                    "Gaming Battery" -> "5s refresh • High thermal & discharge alert"
+                                    "Monitoring Efficient" -> "15s refresh • Minimal background execution"
+                                    else -> "3s refresh • Real-time hardware telemetry"
+                                }
+                                Text(text = desc, color = NovaTextGray, fontSize = 10.sp)
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Active",
+                                    tint = NovaNeonGreen,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Thermal Guard & Cooler Card (Section 19)
+        NeonCard(borderColor = if (battery.isOverheating) Color(0xFFFF3D71) else NovaCardBorder) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Thermal Guard Protection",
+                    color = NovaTextWhite,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (battery.isOverheating) Color(0xFFFF3D71).copy(alpha = 0.2f) else NovaNeonGreen.copy(alpha = 0.15f))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (battery.isOverheating) "THROTTLING WARN" else "NOMINAL",
+                        color = if (battery.isOverheating) Color(0xFFFF3D71) else NovaNeonGreen,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (battery.isOverheating) {
+                Text(
+                    text = "⚠ High thermal load detected (${"%.1f".format(battery.temperatureCelsius)}°C). NovaBoost has reduced internal monitoring polling to allow CPU cooldown. Avoid heavy 3D gaming until temperature normalizes.",
+                    color = Color(0xFFFF3D71),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            } else {
+                Text(
+                    text = "Thermal Governor operating at nominal parameters. Software cannot physically chill device semiconductors; NovaBoost optimizes CPU wakeups and telemetry overhead to prevent unnecessary heat generation.",
+                    color = NovaTextGray,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Real Telemetry & Power Diagnostics Card
         NeonCard {

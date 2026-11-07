@@ -57,16 +57,36 @@ import com.example.ui.theme.NovaTextGray
 import com.example.ui.theme.NovaTextWhite
 import com.example.ui.viewmodel.NovaMainViewModel
 
+import androidx.compose.material.icons.filled.Adjust
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.Radar
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Tv
+import com.example.ui.theme.NovaNeonPurple
+import com.example.ui.theme.NovaNeonYellow
+
 @Composable
 fun HomeScreen(
     viewModel: NovaMainViewModel,
-    onNavigateToSettings: () -> Unit,
-    onShowPerformanceReport: () -> Unit,
+    onNavigateToCleaner: () -> Unit = {},
+    onNavigateToMemory: () -> Unit = {},
+    onNavigateToGaming: () -> Unit = {},
+    onNavigateToAutoScan: () -> Unit = {},
+    onNavigateToThermalGuard: () -> Unit = {},
+    onNavigateToNetwork: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {},
+    onShowPerformanceReport: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val ram by viewModel.ramInfo.collectAsState()
     val storage by viewModel.storageInfo.collectAsState()
     val battery by viewModel.batteryInfo.collectAsState()
+    val cpu by viewModel.cpuInfo.collectAsState()
+    val gpu by viewModel.gpuDiagnostics.collectAsState()
+    val netStatus by viewModel.networkStatus.collectAsState()
 
     val healthScore by viewModel.healthScore.collectAsState()
 
@@ -116,7 +136,7 @@ fun HomeScreen(
             sizeDp = 185
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Primary Action: Smart Memory Diagnostics & Trim
         NeonActionButton(
@@ -128,35 +148,151 @@ fun HomeScreen(
             testTag = "home_smart_boost_button"
         )
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
-        // 3 Metrics Horizontal Cards Row
+        // 3 Hardware Metrics Row (RAM, Storage, Battery)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // RAM Card
             MetricMiniCard(
                 icon = Icons.Default.Memory,
                 label = "RAM",
                 primaryValue = "$usedRamGb GB",
                 secondaryValue = "/ $totalRamGb GB",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onNavigateToMemory() }
             )
-            // Storage Card
             MetricMiniCard(
                 icon = Icons.Default.Storage,
                 label = "Storage",
                 primaryValue = "$usedStorageGb GB",
                 secondaryValue = "/ $totalStorageGb GB",
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onNavigateToCleaner() }
             )
-            // Battery Card
             MetricMiniCard(
                 icon = Icons.Default.BatteryChargingFull,
                 label = "Battery",
                 primaryValue = if (battery.isAvailable) "${battery.levelPercent}%" else "Unavailable",
-                secondaryValue = if (battery.isAvailable) (if (battery.status.contains("Charging", ignoreCase = true)) "Charging" else "Normal") else "Disconnected",
+                secondaryValue = if (battery.isAvailable) (if (battery.status.contains("Charging", ignoreCase = true)) "Charging" else "${battery.temperatureCelsius.toInt()}°C") else "Unknown",
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onNavigateToThermalGuard() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Secondary Hardware Telemetry Row (CPU, GPU, Network)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MetricMiniCard(
+                icon = Icons.Default.Speed,
+                label = "CPU",
+                primaryValue = "${cpu.processorCount} Cores",
+                secondaryValue = if (cpu.isSystemUsageAvailable) "${cpu.cpuUsagePercent}% Load" else cpu.architecture,
+                modifier = Modifier.weight(1f)
+            )
+            MetricMiniCard(
+                icon = Icons.Default.Tv,
+                label = "GPU",
+                primaryValue = if (gpu.isProbeSuccessful) gpu.renderer.take(12) else "EGL GPU",
+                secondaryValue = if (gpu.vulkanSupported) "Vulkan Ready" else "OpenGL ES",
+                modifier = Modifier.weight(1f)
+            )
+            MetricMiniCard(
+                icon = Icons.Default.NetworkCheck,
+                label = "Network",
+                primaryValue = if (netStatus.isConnected) netStatus.transportType.take(8) else "Offline",
+                secondaryValue = if (netStatus.isVpnActive) "VPN Active" else "Direct Link",
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onNavigateToNetwork() }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Quick Actions Section Title
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Quick Optimization Actions",
+                color = NovaTextWhite,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "Real Android APIs",
+                color = NovaNeonCyan,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // 6 Quick Actions Grid (2 rows x 3 columns)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            HomeQuickActionButton(
+                icon = Icons.Default.Radar,
+                label = "Smart Scan",
+                iconColor = NovaNeonGreen,
+                onClick = onNavigateToAutoScan,
+                modifier = Modifier.weight(1f)
+            )
+            HomeQuickActionButton(
+                icon = Icons.Default.Delete,
+                label = "Clean Phone",
+                iconColor = NovaNeonCyan,
+                onClick = onNavigateToCleaner,
+                modifier = Modifier.weight(1f)
+            )
+            HomeQuickActionButton(
+                icon = Icons.Default.Memory,
+                label = "Memory",
+                iconColor = NovaNeonBlue,
+                onClick = onNavigateToMemory,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            HomeQuickActionButton(
+                icon = Icons.Default.Gamepad,
+                label = "Gaming Center",
+                iconColor = NovaNeonPurple,
+                onClick = onNavigateToGaming,
+                modifier = Modifier.weight(1f)
+            )
+            HomeQuickActionButton(
+                icon = Icons.Default.Thermostat,
+                label = "Thermal Guard",
+                iconColor = Color(0xFFFF5252),
+                onClick = onNavigateToThermalGuard,
+                modifier = Modifier.weight(1f)
+            )
+            HomeQuickActionButton(
+                icon = Icons.Default.NetworkCheck,
+                label = "Network Test",
+                iconColor = NovaNeonYellow,
+                onClick = onNavigateToNetwork,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -204,6 +340,46 @@ fun HomeScreen(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun HomeQuickActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    iconColor: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(NovaCardBg)
+            .border(1.dp, NovaCardBorder, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = iconColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = label,
+                color = NovaTextWhite,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1
+            )
+        }
     }
 }
 

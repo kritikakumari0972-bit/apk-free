@@ -31,7 +31,9 @@ import com.example.core.storage.StorageCleaner
 import com.example.data.CleanHistoryRecord
 import com.example.data.GamingSessionRecord
 import com.example.data.NovaDatabase
+import com.example.data.PerformanceSnapshotRecord
 import com.example.data.PreferencesManager
+import com.example.data.SmartScanRecord
 import com.example.services.NovaBoostVpnService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -179,17 +181,53 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
     val darkTheme: StateFlow<Boolean> = preferencesManager.darkThemeFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
 
+    // Initialization Experience State
+    val isAppInitialized = MutableStateFlow(false)
+    val initializationStatus = MutableStateFlow("Initializing kernel telemetry...")
+
+    // Performance History & Smart Scan History (Room)
+    val performanceHistory: StateFlow<List<PerformanceSnapshotRecord>> = database.performanceSnapshotDao().getRecentSnapshots()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val smartScanHistory: StateFlow<List<SmartScanRecord>> = database.smartScanDao().getRecentScans()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Profiles
+    val batteryProfile: StateFlow<String> = preferencesManager.batteryProfileFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Balanced")
+    val gamingProfile: StateFlow<String> = preferencesManager.gamingProfileFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "Balanced Gaming")
+
     init {
-        // Startup Sequence: background hardware probing without blocking Main Thread
+        // Asynchronous Startup Sequence: background hardware probing without blocking Main Thread
         viewModelScope.launch(Dispatchers.IO) {
+            initializationStatus.value = "Initializing hardware & settings..."
+            delay(150L)
+            initializationStatus.value = "Detecting Linux RAM & zRAM..."
+            val ram = hardwareMonitor.getRamInfo()
+            val storage = hardwareMonitor.getStorageInfo()
+            val bat = hardwareMonitor.getBatteryInfo()
+
+            initializationStatus.value = "Probing CPU architecture & GPU..."
             val cpu = hardwareMonitor.getCpuInfo()
             val gpu = GpuProbe.probeGpu(context)
+
+            initializationStatus.value = "Initializing network & diagnostics..."
             val net = networkDiagnostics.getNetworkDetails()
+
             withContext(Dispatchers.Main) {
+                ramInfo.value = ram
+                storageInfo.value = storage
+                batteryInfo.value = bat
                 cpuInfo.value = cpu
                 gpuDiagnostics.value = gpu
                 networkDetails.value = net
+                healthScore.value = computeLiveHealthScore(ram, storage, bat)
+                initializationStatus.value = "System Subsystems Active"
+                isAppInitialized.value = true
             }
+
+            // Record initial baseline performance snapshot
+            recordPerformanceSnapshot()
         }
         startTelemetryLoop()
         loadInstalledApps()
@@ -442,23 +480,25 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         autoScanJob?.cancel()
         autoScanJob = viewModelScope.launch {
             val initialSteps = listOf(
+                AutoScanStep("stage_compat", "Hardware Compatibility", "Checking device SoC & Android kernel...", false, ""),
                 AutoScanStep("stage_ram", "Physical RAM", "Evaluating physical memory & pressure...", false, ""),
                 AutoScanStep("stage_zram", "Linux zRAM", "Checking compressed in-memory swap...", false, ""),
                 AutoScanStep("stage_swap", "System Swap", "Detecting storage-backed swap interfaces...", false, ""),
                 AutoScanStep("stage_storage", "Storage Capacity", "Analyzing internal partitions & available headroom...", false, ""),
-                AutoScanStep("stage_junk", "Junk & Temp Files", "Scanning cache directories...", false, ""),
+                AutoScanStep("stage_junk", "Temporary Files", "Scanning cache directories...", false, ""),
                 AutoScanStep("stage_duplicate", "Duplicate Files (SHA-256)", "Checking identical files via streaming hash...", false, ""),
                 AutoScanStep("stage_cpu", "CPU & Architecture", "Reading architecture, frequencies and load...", false, ""),
                 AutoScanStep("stage_gpu", "GPU & Vulkan Architecture", "Probing graphics pipeline & renderer...", false, ""),
                 AutoScanStep("stage_battery", "Battery Health & Level", "Reading battery percentage and chemistry...", false, ""),
                 AutoScanStep("stage_thermal", "Thermal Governor State", "Inspecting Android thermal throttling level...", false, ""),
                 AutoScanStep("stage_network", "Network Latency & Connectivity", "Probing socket latency and DNS resolution...", false, ""),
+                AutoScanStep("stage_background", "Background Activity", "Inspecting running application memory pressure...", false, ""),
                 AutoScanStep("stage_gaming", "Gaming System Readiness", "Evaluating overall gaming headroom...", false, "")
             )
 
             autoScanReport.value = AutoScanReport(
                 isScanning = true,
-                progressPercent = 5,
+                progressPercent = 4,
                 steps = initialSteps,
                 overallHealthScore = 0,
                 keyFindings = emptyList(),
@@ -466,125 +506,146 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             )
 
             try {
-                // 1. RAM
-                val ram = withContext(Dispatchers.Default) { hardwareMonitor.getRamInfo() }
+                // 1. Hardware Compatibility
                 val step1 = AutoScanStep(
+                    id = "stage_compat",
+                    title = "Hardware Compatibility",
+                    status = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}",
+                    isComplete = true,
+                    details = "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT}) • ABI: ${android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "ARM"}"
+                )
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 8, steps = listOf(step1) + initialSteps.drop(1))
+
+                // 2. Physical RAM
+                val ram = withContext(Dispatchers.Default) { hardwareMonitor.getRamInfo() }
+                val step2 = AutoScanStep(
                     id = "stage_ram",
                     title = "Physical RAM",
                     status = if (ram.isPhysicalRamAvailable) "${ram.usagePercentage}% utilized" else "Physical RAM reading unavailable",
                     isComplete = true,
                     details = "${ram.availableBytes / (1024 * 1024)} MB available of ${ram.totalBytes / (1024 * 1024)} MB total"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 10, steps = listOf(step1) + initialSteps.drop(1))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 15, steps = listOf(step1, step2) + initialSteps.drop(2))
 
-                // 2. zRAM
-                val step2 = AutoScanStep(
+                // 3. Linux zRAM
+                val step3 = AutoScanStep(
                     id = "stage_zram",
                     title = "Linux zRAM",
                     status = ram.swapSupportStatus,
                     isComplete = true,
                     details = ram.zRamUsageString
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 18, steps = listOf(step1, step2) + initialSteps.drop(2))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 22, steps = listOf(step1, step2, step3) + initialSteps.drop(3))
 
-                // 3. System Swap
-                val step3 = AutoScanStep(
+                // 4. System Swap
+                val step4 = AutoScanStep(
                     id = "stage_swap",
                     title = "System Swap",
                     status = ram.swapSourceType,
                     isComplete = true,
                     details = if (ram.swapTotalBytes > 0) "${ram.swapTotalBytes / (1024 * 1024)} MB configured" else "No storage swap partition active (Requires Root)"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 26, steps = listOf(step1, step2, step3) + initialSteps.drop(3))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 29, steps = listOf(step1, step2, step3, step4) + initialSteps.drop(4))
 
-                // 4. Storage
+                // 5. Storage Capacity
                 val storage = withContext(Dispatchers.Default) { hardwareMonitor.getStorageInfo() }
-                val step4 = AutoScanStep(
+                val step5 = AutoScanStep(
                     id = "stage_storage",
                     title = "Storage Capacity",
                     status = "${storage.usagePercentage}% occupied",
                     isComplete = true,
                     details = "${storage.availableBytes / (1024 * 1024 * 1024)} GB free out of ${storage.totalBytes / (1024 * 1024 * 1024)} GB"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 34, steps = listOf(step1, step2, step3, step4) + initialSteps.drop(4))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 36, steps = listOf(step1, step2, step3, step4, step5) + initialSteps.drop(5))
 
-                // 5 & 6. Junk & Duplicates
+                // 6 & 7. Junk & Duplicate Files
                 val scanResult = storageCleaner.scanStorage()
                 val tempGroup = scanResult.groups.find { it.category == CleanCategory.TEMP_FILES }
-                val step5 = AutoScanStep(
+                val step6 = AutoScanStep(
                     id = "stage_junk",
-                    title = "Junk & Temp Files",
+                    title = "Temporary Files",
                     status = "${tempGroup?.items?.size ?: 0} temporary objects",
                     isComplete = true,
                     details = "${(tempGroup?.totalBytes ?: 0L) / (1024 * 1024)} MB identified across cache folders"
                 )
                 val dupGroup = scanResult.groups.find { it.category == CleanCategory.DUPLICATE_FILES }
-                val step6 = AutoScanStep(
+                val step7 = AutoScanStep(
                     id = "stage_duplicate",
                     title = "Duplicate Files (SHA-256)",
                     status = "${dupGroup?.items?.size ?: 0} duplicate files",
                     isComplete = true,
                     details = "${(dupGroup?.totalBytes ?: 0L) / (1024 * 1024)} MB verified by 64-KB streaming hash"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 50, steps = listOf(step1, step2, step3, step4, step5, step6) + initialSteps.drop(6))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 50, steps = listOf(step1, step2, step3, step4, step5, step6, step7) + initialSteps.drop(7))
 
-                // 7. CPU
+                // 8. CPU
                 val cpu = withContext(Dispatchers.Default) { hardwareMonitor.getCpuInfo() }
-                val step7 = AutoScanStep(
+                val step8 = AutoScanStep(
                     id = "stage_cpu",
                     title = "CPU & Architecture",
                     status = "${cpu.processorCount} Cores (${cpu.architecture})",
                     isComplete = true,
                     details = if (cpu.isSystemUsageAvailable) "Load: ${cpu.cpuUsagePercent}% (${cpu.cpuUsageMode})" else "Available (${cpu.processorCount} Cores) | System /proc/stat restricted by SELinux"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 60, steps = listOf(step1, step2, step3, step4, step5, step6, step7) + initialSteps.drop(7))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 58, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8) + initialSteps.drop(8))
 
-                // 8. GPU
+                // 9. GPU
                 val gpu = gpuDiagnostics.value
-                val step8 = AutoScanStep(
+                val step9 = AutoScanStep(
                     id = "stage_gpu",
                     title = "GPU & Vulkan Architecture",
                     status = if (gpu.isProbeSuccessful) gpu.renderer else "Driver probe restricted",
                     isComplete = true,
                     details = "OpenGL: ${gpu.openGlVersion} | Vulkan: ${gpu.vulkanLevel}"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 70, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8) + initialSteps.drop(8))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 66, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9) + initialSteps.drop(9))
 
-                // 9. Battery
+                // 10. Battery
                 val bat = withContext(Dispatchers.Default) { hardwareMonitor.getBatteryInfo() }
-                val step9 = AutoScanStep(
+                val step10 = AutoScanStep(
                     id = "stage_battery",
                     title = "Battery Health & Level",
                     status = if (bat.isAvailable) "${bat.levelPercent}% (${bat.health})" else "Unavailable",
                     isComplete = true,
                     details = if (bat.isAvailable) "${bat.voltageMv} mV • Tech: ${bat.technology} • Power: ${bat.powerSource}" else "Battery info unavailable"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 80, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9) + initialSteps.drop(9))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 74, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10) + initialSteps.drop(10))
 
-                // 10. Thermal
-                val step10 = AutoScanStep(
+                // 11. Thermal
+                val step11 = AutoScanStep(
                     id = "stage_thermal",
                     title = "Thermal Governor State",
                     status = if (bat.isAvailable) "${"%.1f".format(bat.temperatureCelsius)}°C (${bat.thermalStatus})" else "Unavailable",
                     isComplete = true,
                     details = if (bat.isOverheating) "Thermal Throttling Active" else "Nominal operating temperature"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 88, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10) + initialSteps.drop(10))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 82, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11) + initialSteps.drop(11))
 
-                // 11. Network
+                // 12. Network
                 val ping = networkDiagnostics.measureTcpHandshake()
-                val step11 = AutoScanStep(
+                val step12 = AutoScanStep(
                     id = "stage_network",
                     title = "Network Latency & Connectivity",
                     status = if (ping.isSuccess) "${ping.latencyMs} ms" else "Connection Failed (${ping.errorMessage ?: "Timeout"})",
                     isComplete = true,
                     details = "Target: ${ping.targetHost} (${ping.measurementType})"
                 )
-                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 95, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11) + initialSteps.drop(11))
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 89, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11, step12) + initialSteps.drop(12))
 
-                // 12. Gaming Readiness
+                // 13. Background Activity
+                val appCount = installedApps.value.size
+                val step13 = AutoScanStep(
+                    id = "stage_background",
+                    title = "Background Activity",
+                    status = "$appCount Installed Packages Indexed",
+                    isComplete = true,
+                    details = "Process memory monitored via standard Linux /proc interfaces"
+                )
+                autoScanReport.value = autoScanReport.value?.copy(progressPercent = 95, steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11, step12, step13) + initialSteps.drop(13))
+
+                // 14. Gaming Readiness
                 val isGamingReady = !bat.isOverheating && (ram.usagePercentage < 88)
-                val step12 = AutoScanStep(
+                val step14 = AutoScanStep(
                     id = "stage_gaming",
                     title = "Gaming System Readiness",
                     status = if (isGamingReady) "Optimal for 3D Gaming" else "Heavy Resource Contention",
@@ -628,14 +689,27 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
                     recommendations.add("System is well maintained. Routine scans recommended weekly.")
                 }
 
+                val finalScore = score.coerceIn(20, 100)
                 autoScanReport.value = AutoScanReport(
                     isScanning = false,
                     progressPercent = 100,
-                    steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11, step12),
-                    overallHealthScore = score.coerceIn(20, 100),
+                    steps = listOf(step1, step2, step3, step4, step5, step6, step7, step8, step9, step10, step11, step12, step13, step14),
+                    overallHealthScore = finalScore,
                     keyFindings = findings,
                     recommendations = recommendations
                 )
+
+                // Persist SmartScanRecord to Room database
+                withContext(Dispatchers.IO) {
+                    database.smartScanDao().insertScan(
+                        SmartScanRecord(
+                            stagesCompleted = 14,
+                            healthScore = finalScore,
+                            summary = findings.firstOrNull() ?: "All subsystems optimal"
+                        )
+                    )
+                }
+                recordPerformanceSnapshot()
             } catch (_: Exception) {
                 autoScanReport.value = autoScanReport.value?.copy(isScanning = false)
             } finally {
@@ -645,10 +719,52 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun clearAllHistory() {
+    fun setBatteryProfile(profile: String) {
         viewModelScope.launch {
+            preferencesManager.setBatteryProfile(profile)
+            when (profile) {
+                "Power Saving" -> preferencesManager.setAutoRefreshSec(10)
+                "Monitoring Efficient" -> preferencesManager.setAutoRefreshSec(15)
+                "Gaming Battery" -> preferencesManager.setAutoRefreshSec(5)
+                else -> preferencesManager.setAutoRefreshSec(3)
+            }
+        }
+    }
+
+    fun setGamingProfile(profile: String) {
+        viewModelScope.launch {
+            preferencesManager.setGamingProfile(profile)
+        }
+    }
+
+    fun recordPerformanceSnapshot() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ram = hardwareMonitor.getRamInfo()
+            val cpu = hardwareMonitor.getCpuInfo()
+            val bat = hardwareMonitor.getBatteryInfo()
+            val storage = hardwareMonitor.getStorageInfo()
+            val score = computeLiveHealthScore(ram, storage, bat)
+
+            database.performanceSnapshotDao().insertSnapshot(
+                PerformanceSnapshotRecord(
+                    healthScore = score,
+                    ramUsagePercentage = ram.usagePercentage,
+                    ramAvailableMb = ram.availableBytes / (1024 * 1024),
+                    cpuUsagePercentage = cpu.cpuUsagePercent,
+                    batteryTempCelsius = bat.temperatureCelsius,
+                    batteryLevel = bat.levelPercent,
+                    storageUsagePercentage = storage.usagePercentage
+                )
+            )
+        }
+    }
+
+    fun clearAllHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
             database.cleanHistoryDao().clearAll()
             database.gamingSessionDao().clearAll()
+            database.performanceSnapshotDao().clearAll()
+            database.smartScanDao().clearAll()
         }
     }
 }

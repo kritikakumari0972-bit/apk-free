@@ -32,3 +32,27 @@ interface CleanHistoryDao {
     @Query("DELETE FROM clean_history")
     suspend fun clearAll()
 }
+
+@Dao
+interface PerformanceSnapshotDao {
+    @Query("SELECT * FROM performance_snapshots ORDER BY timestamp DESC LIMIT :limit")
+    fun getRecentSnapshots(limit: Int = 30): Flow<List<PerformanceSnapshotRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSnapshot(snapshot: PerformanceSnapshotRecord): Long
+
+    @Query("DELETE FROM performance_snapshots")
+    suspend fun clearAll()
+}
+
+@Dao
+interface SmartScanDao {
+    @Query("SELECT * FROM smart_scan_history ORDER BY timestamp DESC LIMIT :limit")
+    fun getRecentScans(limit: Int = 20): Flow<List<SmartScanRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScan(record: SmartScanRecord): Long
+
+    @Query("DELETE FROM smart_scan_history")
+    suspend fun clearAll()
+}

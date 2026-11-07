@@ -29,10 +29,13 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.PerformanceSnapshotRecord
 import androidx.compose.ui.unit.sp
 import com.example.ui.components.NeonActionButton
 import com.example.ui.components.NeonCard
@@ -68,6 +72,8 @@ fun PerformanceReportScreen(
     val battery by viewModel.batteryInfo.collectAsState()
 
     val healthScore by viewModel.healthScore.collectAsState()
+    val performanceHistory by viewModel.performanceHistory.collectAsState()
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     val ramFreeGb = remember(ram) {
         com.example.core.util.FormatUtils.formatBytes(ram.availableBytes)
@@ -198,6 +204,108 @@ fun PerformanceReportScreen(
             )
         }
 
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Performance History Card (Section 23)
+        NeonCard {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Performance History (Local Room)",
+                    color = NovaTextWhite,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${performanceHistory.size} Snapshots",
+                    color = NovaNeonCyan,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (performanceHistory.isEmpty()) {
+                Text(
+                    text = "No snapshots recorded yet. Tap 'Record Snapshot' or run an Auto-Scan to save genuine device measurements.",
+                    color = NovaTextGray,
+                    fontSize = 11.sp
+                )
+            } else {
+                // Genuine Historical Chart: Bar visualization based strictly on saved database values
+                Text(
+                    text = "Health Score Timeline (Past Measurements)",
+                    color = NovaTextGray,
+                    fontSize = 10.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(60.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    val recent = performanceHistory.take(16).reversed()
+                    recent.forEach { snapshot ->
+                        val barHeightRatio = (snapshot.healthScore / 100f).coerceIn(0.1f, 1f)
+                        val barColor = if (snapshot.healthScore >= 85) NovaNeonGreen else if (snapshot.healthScore >= 70) NovaNeonCyan else NovaNeonYellow
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height((60 * barHeightRatio).dp)
+                                .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
+                                .background(barColor)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    performanceHistory.take(4).forEach { item ->
+                        val date = java.text.SimpleDateFormat("MMM dd, HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(item.timestamp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(text = date, color = NovaTextGray, fontSize = 10.sp)
+                            Text(text = "Score: ${item.healthScore}% • RAM: ${item.ramUsagePercentage}% • ${item.batteryTempCelsius.toInt()}°C", color = NovaTextWhite, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                TextButton(
+                    onClick = { viewModel.recordPerformanceSnapshot() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("+ Record Snapshot", color = NovaNeonCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                if (performanceHistory.isNotEmpty()) {
+                    TextButton(
+                        onClick = { showClearHistoryDialog = true },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Clear History", color = Color(0xFFFF5252), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(20.dp))
 
         // Status: All systems are optimal!
@@ -222,6 +330,39 @@ fun PerformanceReportScreen(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+    }
+
+    if (showClearHistoryDialog) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = {
+                Text(text = "Clear All History?", color = NovaTextWhite, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    text = "This will erase all recorded performance snapshots, cleaning history, and gaming session summaries from local storage.",
+                    color = NovaTextGray,
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearAllHistory()
+                        showClearHistoryDialog = false
+                    }
+                ) {
+                    Text("Clear All", color = Color(0xFFFF5252), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
+                    Text("Cancel", color = NovaNeonCyan)
+                }
+            },
+            containerColor = NovaCardBg,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }
 
