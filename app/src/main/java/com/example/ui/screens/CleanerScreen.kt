@@ -85,6 +85,14 @@ fun CleanerScreen(
     var showConfirmDialog by remember { mutableStateOf(false) }
     var expandedCategory by remember { mutableStateOf<CleanCategory?>(null) }
 
+    val safFolderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.scanCustomSafFolder(uri)
+        }
+    }
+
     LaunchedEffect(Unit) {
         if (scanResult == null && !isScanning) {
             viewModel.startStorageScan()
@@ -202,6 +210,27 @@ fun CleanerScreen(
             testTag = "clean_now_button"
         )
 
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            NeonActionButton(
+                text = "Select Folder (SAF)",
+                onClick = { safFolderLauncher.launch(null) },
+                enabled = !isScanning,
+                modifier = Modifier.weight(1f),
+                testTag = "saf_folder_picker_button"
+            )
+            NeonActionButton(
+                text = "Rescan",
+                onClick = { viewModel.startStorageScan() },
+                enabled = !isScanning,
+                modifier = Modifier.weight(1f),
+                testTag = "cleaner_rescan_button"
+            )
+        }
+
         // Select All / Deselect All Controls
         if (scanResult != null && !isScanning && totalBytesFound > 0) {
             Spacer(modifier = Modifier.height(8.dp))
@@ -302,6 +331,7 @@ fun CleanerScreen(
                 CleanCategory.EMPTY_FOLDERS -> NovaNeonGreen
                 CleanCategory.OBSOLETE_APKS -> NovaNeonBlue
                 CleanCategory.OLD_DOWNLOADS -> Color(0xFFE040FB)
+                CleanCategory.CUSTOM_SAF_FOLDER -> NovaNeonCyan
             }
 
             Box(

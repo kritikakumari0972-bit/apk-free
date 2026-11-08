@@ -93,7 +93,7 @@ fun AutoScanScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Automated 8-point system telemetry verification",
+                        text = "Automated 14-stage system telemetry verification",
                         color = NovaTextSecondary,
                         fontSize = 12.sp
                     )

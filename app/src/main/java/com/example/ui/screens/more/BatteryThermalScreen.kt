@@ -259,7 +259,19 @@ fun BatteryThermalScreen(
         Spacer(modifier = Modifier.height(14.dp))
 
         // Thermal Guard & Cooler Card (Section 19)
-        NeonCard(borderColor = if (battery.isOverheating) Color(0xFFFF3D71) else NovaCardBorder) {
+        val hasThermalEvent = battery.isCpuThrottling || battery.isOverheating
+        val thermalBadgeText = when {
+            battery.isCpuThrottling -> "CPU THROTTLING ACTIVE (${battery.thermalStatus})"
+            battery.isOverheating -> "BATTERY ELEVATED WARMTH (${battery.temperatureCelsius.toInt()}°C)"
+            else -> "NOMINAL (${battery.thermalStatus})"
+        }
+        val thermalBadgeColor = when {
+            battery.isCpuThrottling -> Color(0xFFFF3D71)
+            battery.isOverheating -> NovaNeonYellow
+            else -> NovaNeonGreen
+        }
+
+        NeonCard(borderColor = if (hasThermalEvent) thermalBadgeColor else NovaCardBorder) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -274,12 +286,12 @@ fun BatteryThermalScreen(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (battery.isOverheating) Color(0xFFFF3D71).copy(alpha = 0.2f) else NovaNeonGreen.copy(alpha = 0.15f))
+                        .background(thermalBadgeColor.copy(alpha = 0.2f))
                         .padding(horizontal = 8.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (battery.isOverheating) "THROTTLING WARN" else "NOMINAL",
-                        color = if (battery.isOverheating) Color(0xFFFF3D71) else NovaNeonGreen,
+                        text = thermalBadgeText,
+                        color = thermalBadgeColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -288,16 +300,23 @@ fun BatteryThermalScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (battery.isOverheating) {
+            if (battery.isCpuThrottling) {
                 Text(
-                    text = "⚠ High thermal load detected (${"%.1f".format(battery.temperatureCelsius)}°C). NovaBoost has reduced internal monitoring polling to allow CPU cooldown. Avoid heavy 3D gaming until temperature normalizes.",
+                    text = "⚠ Android Thermal Governor reporting hardware SoC throttling: ${battery.thermalStatus}. System frequencies have been automatically stepped down to prevent semiconductor degradation.",
                     color = Color(0xFFFF3D71),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            } else if (battery.isOverheating) {
+                Text(
+                    text = "⚠ Battery surface temperature elevated (${"%.1f".format(battery.temperatureCelsius)}°C), but CPU PowerManager reports unthrottled nominal operating state. Avoid heavy charging while gaming to prevent heat accumulation.",
+                    color = NovaNeonYellow,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
                 )
             } else {
                 Text(
-                    text = "Thermal Governor operating at nominal parameters. Software cannot physically chill device semiconductors; NovaBoost optimizes CPU wakeups and telemetry overhead to prevent unnecessary heat generation.",
+                    text = "Thermal Governor operating at nominal parameters (${battery.thermalStatus}). Software cannot physically chill device semiconductors; NovaBoost optimizes CPU wakeups and telemetry overhead to prevent unnecessary heat generation.",
                     color = NovaTextGray,
                     fontSize = 11.sp,
                     lineHeight = 15.sp

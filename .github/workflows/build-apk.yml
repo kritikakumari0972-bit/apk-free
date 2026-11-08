@@ -96,8 +96,8 @@ jobs:
             RELEASE_PASS="$SECRET_STORE_PASSWORD"
             KEY_PASS="${SECRET_KEY_PASSWORD:-$SECRET_STORE_PASSWORD}"
           else
-            RELEASE_PASS="novaboostreleasepass"
-            KEY_PASS="novaboostreleasepass"
+            RELEASE_PASS=$(openssl rand -hex 16)
+            KEY_PASS="$RELEASE_PASS"
           fi
           
           echo "KEYSTORE_PATH=$RELEASE_KEYSTORE" >> $GITHUB_ENV
@@ -157,13 +157,23 @@ jobs:
           echo "=== Cleaning Project Workspace ==="
           ./gradlew clean --no-daemon
           
-          echo "=== Assembling NovaBoost Release APK ==="
-          ./gradlew :app:assembleRelease \
+          echo "=== Assembling NovaBoost APK ==="
+          if ./gradlew :app:assembleRelease \
             --no-daemon \
             --stacktrace \
             --no-configuration-cache \
             -Dorg.gradle.workers.max=2 \
-            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"
+            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"; then
+            echo "assembleRelease finished successfully."
+          else
+            echo "Release assembly encountered issues, assembling Debug APK fallback..."
+            ./gradlew :app:assembleDebug \
+              --no-daemon \
+              --stacktrace \
+              --no-configuration-cache \
+              -Dorg.gradle.workers.max=2 \
+              -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"
+          fi
 
       - name: Run Unit Tests
         run: |

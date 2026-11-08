@@ -75,13 +75,24 @@ fun MemoryScreen(
     val processRamMb = remember(ram) {
         com.example.core.util.FormatUtils.formatBytes(ram.processUsedBytes)
     }
+    val zRamActive = remember(ram) {
+        ram.zRamState == com.example.core.hardware.ZRamState.CURRENTLY_IN_USE ||
+        ram.zRamState == com.example.core.hardware.ZRamState.ACTIVE
+    }
+    val zRamStateBadge = remember(ram) {
+        when (ram.zRamState) {
+            com.example.core.hardware.ZRamState.CURRENTLY_IN_USE -> "Currently In Use"
+            com.example.core.hardware.ZRamState.ACTIVE -> "Active (Kernel Swapon)"
+            com.example.core.hardware.ZRamState.CONFIGURED -> "Configured (Swapon Pending)"
+            com.example.core.hardware.ZRamState.DETECTED -> "Detected (Kernel Node)"
+            com.example.core.hardware.ZRamState.RESTRICTED_OR_UNAVAILABLE -> "OEM Restricted / Unavailable"
+        }
+    }
     val zRamGb = remember(ram) {
         if (ram.swapTotalBytes > 0) com.example.core.util.FormatUtils.formatBytes(ram.swapTotalBytes)
-        else if (ram.zRamAccessible) "Kernel Active"
+        else if (ram.zRamCapacityBytes > 0) "${ram.zRamCapacityBytes / (1024 * 1024)} MB (Configured)"
+        else if (ram.zRamState == com.example.core.hardware.ZRamState.DETECTED) "Detected (Node)"
         else "OEM Protected"
-    }
-    val zRamActive = remember(ram) {
-        ram.swapTotalBytes > 0 || ram.zRamAccessible
     }
 
     Column(
@@ -220,8 +231,8 @@ fun MemoryScreen(
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = if (zRamActive) "Active" else "OEM Restricted",
-                            color = if (zRamActive) NovaNeonGreen else NovaTextGray,
+                            text = zRamStateBadge,
+                            color = if (zRamActive) NovaNeonGreen else if (ram.zRamState == com.example.core.hardware.ZRamState.CONFIGURED || ram.zRamState == com.example.core.hardware.ZRamState.DETECTED) NovaNeonYellow else NovaTextGray,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
                         )

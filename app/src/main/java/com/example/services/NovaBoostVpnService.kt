@@ -64,16 +64,22 @@ class NovaBoostVpnService : VpnService() {
                 state = VpnConnectionState.NOT_CONFIGURED,
                 endpointHost = null,
                 endpointPort = 0,
-                handshakeStatus = "No remote VPN endpoint configured"
+                handshakeStatus = "VPN PROVIDER CONFIGURATION REQUIRED"
             )
         )
         val vpnTelemetry: StateFlow<VpnTelemetry> = _vpnTelemetry.asStateFlow()
 
-        val isVpnRunning: StateFlow<Boolean>
-            get() = MutableStateFlow(_vpnTelemetry.value.state == VpnConnectionState.CONNECTED)
+        private val _isVpnRunning = MutableStateFlow(false)
+        val isVpnRunning: StateFlow<Boolean> = _isVpnRunning.asStateFlow()
 
-        val vpnStatusMessage: StateFlow<String>
-            get() = MutableStateFlow(_vpnTelemetry.value.state.displayName)
+        private val _vpnStatusMessage = MutableStateFlow(VpnConnectionState.NOT_CONFIGURED.displayName)
+        val vpnStatusMessage: StateFlow<String> = _vpnStatusMessage.asStateFlow()
+
+        fun setTelemetry(telemetry: VpnTelemetry) {
+            _vpnTelemetry.value = telemetry
+            _isVpnRunning.value = (telemetry.state == VpnConnectionState.CONNECTED)
+            _vpnStatusMessage.value = telemetry.state.displayName
+        }
 
         private const val NOTIFICATION_CHANNEL_ID = "novaboost_vpn_channel"
         private const val NOTIFICATION_ID = 2002
@@ -98,24 +104,28 @@ class NovaBoostVpnService : VpnService() {
 
         // Rule: Never claim connected without a valid remote endpoint
         if (serverHost.isNullOrBlank()) {
-            _vpnTelemetry.value = VpnTelemetry(
-                state = VpnConnectionState.NOT_CONFIGURED,
-                endpointHost = null,
-                endpointPort = serverPort,
-                errorDetails = "VPN Provider configuration required. Enter a live remote server host.",
-                handshakeStatus = "Configuration missing"
+            setTelemetry(
+                VpnTelemetry(
+                    state = VpnConnectionState.NOT_CONFIGURED,
+                    endpointHost = null,
+                    endpointPort = serverPort,
+                    errorDetails = "VPN Provider configuration required. Enter a live remote server host.",
+                    handshakeStatus = "VPN PROVIDER CONFIGURATION REQUIRED"
+                )
             )
             stopSelf()
             return START_NOT_STICKY
         }
 
         if (serverPort !in 1..65535) {
-            _vpnTelemetry.value = VpnTelemetry(
-                state = VpnConnectionState.CONFIGURATION_INVALID,
-                endpointHost = serverHost,
-                endpointPort = serverPort,
-                errorDetails = "Invalid port ($serverPort). Port must be between 1 and 65535.",
-                handshakeStatus = "Port rejected"
+            setTelemetry(
+                VpnTelemetry(
+                    state = VpnConnectionState.CONFIGURATION_INVALID,
+                    endpointHost = serverHost,
+                    endpointPort = serverPort,
+                    errorDetails = "Invalid port ($serverPort). Port must be between 1 and 65535.",
+                    handshakeStatus = "Port rejected"
+                )
             )
             stopSelf()
             return START_NOT_STICKY
@@ -127,12 +137,14 @@ class NovaBoostVpnService : VpnService() {
 
     private fun startTunnelHandshake(serverHost: String, serverPort: Int, protocol: String) {
         vpnJob?.cancel()
-        _vpnTelemetry.value = VpnTelemetry(
-            state = VpnConnectionState.CONNECTING,
-            endpointHost = serverHost,
-            endpointPort = serverPort,
-            protocol = protocol,
-            handshakeStatus = "Resolving endpoint $serverHost..."
+        setTelemetry(
+            VpnTelemetry(
+                state = VpnConnectionState.CONNECTING,
+                endpointHost = serverHost,
+                endpointPort = serverPort,
+                protocol = protocol,
+                handshakeStatus = "Resolving endpoint $serverHost..."
+            )
         )
 
         vpnJob = serviceScope.launch {
@@ -142,13 +154,15 @@ class NovaBoostVpnService : VpnService() {
                 val address = try {
                     InetAddress.getByName(serverHost)
                 } catch (e: Exception) {
-                    _vpnTelemetry.value = VpnTelemetry(
-                        state = VpnConnectionState.CONNECTION_FAILED,
-                        endpointHost = serverHost,
-                        endpointPort = serverPort,
-                        protocol = protocol,
-                        errorDetails = "DNS resolution failed: ${e.localizedMessage ?: "Host not found"}",
-                        handshakeStatus = "Resolution error"
+                    setTelemetry(
+                        VpnTelemetry(
+                            state = VpnConnectionState.CONNECTION_FAILED,
+                            endpointHost = serverHost,
+                            endpointPort = serverPort,
+                            protocol = protocol,
+                            errorDetails = "DNS resolution failed: ${e.localizedMessage ?: "Host not found"}",
+                            handshakeStatus = "Resolution error"
+                        )
                     )
                     stopSelf()
                     return@launch
@@ -156,9 +170,11 @@ class NovaBoostVpnService : VpnService() {
                 val dnsTime = System.currentTimeMillis() - dnsStart
 
                 // Step 2: Protocol Handshake with Remote Endpoint Socket
-                _vpnTelemetry.value = _vpnTelemetry.value.copy(
-                    state = VpnConnectionState.HANDSHAKE_IN_PROGRESS,
-                    handshakeStatus = "Attempting cryptographic handshake with $serverHost:${serverPort}..."
+                setTelemetry(
+                    vpnTelemetry.value.copy(
+                        state = VpnConnectionState.HANDSHAKE_IN_PROGRESS,
+                        handshakeStatus = "Attempting cryptographic handshake with $serverHost:${serverPort}..."
+                    )
                 )
 
                 var measuredLatency = -1L
@@ -172,14 +188,16 @@ class NovaBoostVpnService : VpnService() {
                 } catch (e: Exception) {
                     try { handshakeSocket.close() } catch (_: Exception) {}
                     // Handshake failed - Remote server is not listening or unreachable
-                    _vpnTelemetry.value = VpnTelemetry(
-                        state = VpnConnectionState.CONNECTION_FAILED,
-                        endpointHost = serverHost,
-                        endpointPort = serverPort,
-                        protocol = protocol,
-                        endpointLatencyMs = dnsTime,
-                        errorDetails = "Handshake timeout / Connection refused: No live VPN server found at $serverHost:$serverPort (${e.localizedMessage})",
-                        handshakeStatus = "Handshake rejected"
+                    setTelemetry(
+                        VpnTelemetry(
+                            state = VpnConnectionState.CONNECTION_FAILED,
+                            endpointHost = serverHost,
+                            endpointPort = serverPort,
+                            protocol = protocol,
+                            endpointLatencyMs = dnsTime,
+                            errorDetails = "Handshake timeout / Connection refused: No live VPN server found at $serverHost:$serverPort (${e.localizedMessage})",
+                            handshakeStatus = "Handshake rejected"
+                        )
                     )
                     stopSelf()
                     return@launch
@@ -194,13 +212,15 @@ class NovaBoostVpnService : VpnService() {
 
                 val vpnPfd = builder.establish()
                 if (vpnPfd == null) {
-                    _vpnTelemetry.value = VpnTelemetry(
-                        state = VpnConnectionState.PERMISSION_REQUIRED,
-                        endpointHost = serverHost,
-                        endpointPort = serverPort,
-                        protocol = protocol,
-                        errorDetails = "System VPN permission revoked or conflicting VPN active.",
-                        handshakeStatus = "VpnService permission error"
+                    setTelemetry(
+                        VpnTelemetry(
+                            state = VpnConnectionState.PERMISSION_REQUIRED,
+                            endpointHost = serverHost,
+                            endpointPort = serverPort,
+                            protocol = protocol,
+                            errorDetails = "System VPN permission revoked or conflicting VPN active.",
+                            handshakeStatus = "VpnService permission error"
+                        )
                     )
                     stopSelf()
                     return@launch
@@ -210,38 +230,51 @@ class NovaBoostVpnService : VpnService() {
                 startTimeMs = System.currentTimeMillis()
 
                 // Step 4: Tunnel successfully established
-                _vpnTelemetry.value = VpnTelemetry(
-                    state = VpnConnectionState.CONNECTED,
-                    endpointHost = serverHost,
-                    endpointPort = serverPort,
-                    protocol = protocol,
-                    endpointLatencyMs = measuredLatency,
-                    handshakeStatus = "Handshake verified. Remote tunnel active."
+                setTelemetry(
+                    VpnTelemetry(
+                        state = VpnConnectionState.CONNECTED,
+                        endpointHost = serverHost,
+                        endpointPort = serverPort,
+                        protocol = protocol,
+                        endpointLatencyMs = measuredLatency,
+                        handshakeStatus = "Handshake verified. Remote tunnel active."
+                    )
                 )
 
                 startVpnForegroundNotification(serverHost, serverPort)
 
-                // Step 5: Active session telemetry loop
-                var bytesSent = 0L
-                var bytesRecv = 0L
+                // Step 5: Active session telemetry loop with real Android TrafficStats counters
+                val myUid = android.os.Process.myUid()
+                val baseTx = android.net.TrafficStats.getUidTxBytes(myUid)
+                val baseRx = android.net.TrafficStats.getUidRxBytes(myUid)
+
                 while (isActive && vpnInterface != null) {
                     delay(1000L)
                     val duration = (System.currentTimeMillis() - startTimeMs) / 1000L
-                    _vpnTelemetry.value = _vpnTelemetry.value.copy(
-                        durationSeconds = duration,
-                        bytesSent = bytesSent,
-                        bytesReceived = bytesRecv
+                    val curTx = android.net.TrafficStats.getUidTxBytes(myUid)
+                    val curRx = android.net.TrafficStats.getUidRxBytes(myUid)
+                    val bytesSent = if (baseTx != android.net.TrafficStats.UNSUPPORTED.toLong() && curTx >= baseTx) curTx - baseTx else 0L
+                    val bytesRecv = if (baseRx != android.net.TrafficStats.UNSUPPORTED.toLong() && curRx >= baseRx) curRx - baseRx else 0L
+
+                    setTelemetry(
+                        vpnTelemetry.value.copy(
+                            durationSeconds = duration,
+                            bytesSent = bytesSent,
+                            bytesReceived = bytesRecv
+                        )
                     )
                 }
 
             } catch (e: Exception) {
-                _vpnTelemetry.value = VpnTelemetry(
-                    state = VpnConnectionState.CONNECTION_FAILED,
-                    endpointHost = serverHost,
-                    endpointPort = serverPort,
-                    protocol = protocol,
-                    errorDetails = "Tunnel fault: ${e.localizedMessage ?: "Unexpected error"}",
-                    handshakeStatus = "Session terminated"
+                setTelemetry(
+                    VpnTelemetry(
+                        state = VpnConnectionState.CONNECTION_FAILED,
+                        endpointHost = serverHost,
+                        endpointPort = serverPort,
+                        protocol = protocol,
+                        errorDetails = "Tunnel fault: ${e.localizedMessage ?: "Unexpected error"}",
+                        handshakeStatus = "Session terminated"
+                    )
                 )
                 disconnectVpn()
                 stopSelf()
@@ -288,11 +321,13 @@ class NovaBoostVpnService : VpnService() {
             vpnInterface = null
         } catch (_: Exception) {}
 
-        val previous = _vpnTelemetry.value
-        _vpnTelemetry.value = previous.copy(
-            state = VpnConnectionState.DISCONNECTED,
-            handshakeStatus = "Session closed",
-            durationSeconds = if (startTimeMs > 0) (System.currentTimeMillis() - startTimeMs) / 1000L else 0L
+        val previous = vpnTelemetry.value
+        setTelemetry(
+            previous.copy(
+                state = VpnConnectionState.DISCONNECTED,
+                handshakeStatus = "Session closed",
+                durationSeconds = if (startTimeMs > 0) (System.currentTimeMillis() - startTimeMs) / 1000L else 0L
+            )
         )
     }
 

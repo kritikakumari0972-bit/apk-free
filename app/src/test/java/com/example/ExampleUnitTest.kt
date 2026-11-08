@@ -381,5 +381,90 @@ class ExampleUnitTest {
         assertTrue(gamingProfiles.contains("Performance Monitoring"))
         assertTrue(gamingProfiles.contains("Thermal-Conscious Gaming"))
     }
+
+    @Test
+    fun testZRamStateDistinction() {
+        val inUse = com.example.core.hardware.ZRamState.CURRENTLY_IN_USE
+        val active = com.example.core.hardware.ZRamState.ACTIVE
+        val configured = com.example.core.hardware.ZRamState.CONFIGURED
+        val detected = com.example.core.hardware.ZRamState.DETECTED
+        val restricted = com.example.core.hardware.ZRamState.RESTRICTED_OR_UNAVAILABLE
+
+        assertEquals(5, com.example.core.hardware.ZRamState.values().size)
+        assertFalse("Configured zRAM is not currently in use", configured == inUse)
+        assertFalse("Detected node is not active swap", detected == active)
+
+        val ramWithZRam = RamInfo(
+            totalBytes = 8L * 1024L * 1024L * 1024L,
+            availableBytes = 4L * 1024L * 1024L * 1024L,
+            usedBytes = 4L * 1024L * 1024L * 1024L,
+            usagePercentage = 50,
+            isLowMemory = false,
+            thresholdBytes = 1024L * 1024L * 1024L,
+            processUsedBytes = 50L * 1024L * 1024L,
+            cachedBytes = 2L * 1024L * 1024L * 1024L,
+            swapTotalBytes = 2L * 1024L * 1024L * 1024L,
+            swapFreeBytes = 1L * 1024L * 1024L * 1024L,
+            zRamAccessible = true,
+            zRamUsageString = "zRAM active",
+            zRamCapacityBytes = 2L * 1024L * 1024L * 1024L,
+            swapSourceType = "Linux zRAM",
+            swapSupportStatus = "Active (zRAM)",
+            zRamState = com.example.core.hardware.ZRamState.CURRENTLY_IN_USE
+        )
+        assertEquals(com.example.core.hardware.ZRamState.CURRENTLY_IN_USE, ramWithZRam.zRamState)
+    }
+
+    @Test
+    fun testThermalGuardThrottlingDecoupling() {
+        // Battery warm (42C) but unthrottled CPU
+        val batteryWarm = BatteryInfo(
+            isAvailable = true,
+            levelPercent = 85,
+            temperatureCelsius = 42.5f,
+            voltageMv = 4050,
+            status = "Discharging",
+            health = "Good",
+            powerSource = "Battery Power",
+            technology = "Li-ion",
+            thermalStatus = "Nominal",
+            isOverheating = true,
+            isCpuThrottling = false,
+            thermalStatusLevel = 0
+        )
+        assertTrue(batteryWarm.isOverheating)
+        assertFalse("Battery surface heat must not fabricate CPU throttling", batteryWarm.isCpuThrottling)
+
+        // CPU throttled by PowerManager (THERMAL_STATUS_MODERATE)
+        val cpuThrottling = BatteryInfo(
+            isAvailable = true,
+            levelPercent = 60,
+            temperatureCelsius = 38.0f,
+            voltageMv = 3900,
+            status = "Discharging",
+            health = "Good",
+            powerSource = "Battery Power",
+            technology = "Li-ion",
+            thermalStatus = "Moderate Throttling",
+            isOverheating = false,
+            isCpuThrottling = true,
+            thermalStatusLevel = 2
+        )
+        assertTrue(cpuThrottling.isCpuThrottling)
+        assertFalse(cpuThrottling.isOverheating)
+    }
+
+    @Test
+    fun testRoomDatabaseMigration1To2() {
+        assertNotNull(com.example.data.NovaDatabase.MIGRATION_1_2)
+        assertEquals(1, com.example.data.NovaDatabase.MIGRATION_1_2.startVersion)
+        assertEquals(2, com.example.data.NovaDatabase.MIGRATION_1_2.endVersion)
+    }
+
+    @Test
+    fun testVpnConnectionStateDisplayName() {
+        val unconfigured = com.example.services.VpnConnectionState.NOT_CONFIGURED
+        assertEquals("VPN PROVIDER CONFIGURATION REQUIRED", unconfigured.displayName)
+    }
 }
 

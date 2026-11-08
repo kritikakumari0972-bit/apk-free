@@ -14,7 +14,8 @@ enum class CleanCategory(val title: String, val description: String) {
     LARGE_FILES("Large Files (> 10MB)", "Oversized files consuming significant local storage capacity"),
     EMPTY_FOLDERS("Empty Directories", "Leftover zero-byte folders from uninstalled or removed apps"),
     OBSOLETE_APKS("APK Installers", "Residual Android installation packages that are no longer needed"),
-    OLD_DOWNLOADS("Old Downloaded Caches", "Temporary downloads and aged files older than 30 days")
+    OLD_DOWNLOADS("Old Downloaded Caches", "Temporary downloads and aged files older than 30 days"),
+    CUSTOM_SAF_FOLDER("User Granted Folder (SAF)", "Files inspected inside user-selected directory via Android Storage Access Framework")
 }
 
 data class CleanItem(
@@ -291,6 +292,68 @@ class StorageCleaner(private val context: Context) {
         }
     }
 
+    suspend fun scanSafTree(treeUri: android.net.Uri): CleanCategoryGroup = withContext(Dispatchers.IO) {
+        val items = mutableListOf<CleanItem>()
+        var totalBytes = 0L
+        try {
+            try {
+                val takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+            } catch (_: Exception) {}
+
+            val docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+
+            val projection = arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            )
+
+            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_SIZE)
+                val dateIdx = cursor.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+
+                while (cursor.moveToNext()) {
+                    val childDocId = if (idIdx >= 0) cursor.getString(idIdx) else null ?: continue
+                    val displayName = if (nameIdx >= 0) cursor.getString(nameIdx) else "File"
+                    val mime = if (mimeIdx >= 0) cursor.getString(mimeIdx) else ""
+                    val size = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else 0L
+                    val lastMod = if (dateIdx >= 0 && !cursor.isNull(dateIdx)) cursor.getLong(dateIdx) else System.currentTimeMillis()
+
+                    val isDir = mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                    if (!isDir && size > 0L) {
+                        val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
+                        items.add(
+                            CleanItem(
+                                id = docUri.toString(),
+                                name = displayName,
+                                path = docUri.toString(),
+                                sizeBytes = size,
+                                category = CleanCategory.CUSTOM_SAF_FOLDER,
+                                lastModified = lastMod,
+                                isSelected = false
+                            )
+                        )
+                        totalBytes += size
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
+        CleanCategoryGroup(
+            category = CleanCategory.CUSTOM_SAF_FOLDER,
+            items = items,
+            totalBytes = totalBytes,
+            selectedBytes = 0L
+        )
+    }
+
     /**
      * Safe verified deletion workflow:
      * SCAN -> ANALYZE -> REVIEW -> SELECT -> CONFIRM -> DELETE -> VERIFY
@@ -306,24 +369,36 @@ class StorageCleaner(private val context: Context) {
 
         for (item in distinctItems) {
             try {
-                val file = File(item.path)
-                // Re-verify existence and metadata before deletion
-                if (file.exists() && file.canWrite()) {
-                    val size = if (file.isDirectory) 0L else file.length()
-                    val deleted = if (file.isDirectory) {
-                        file.deleteRecursively()
-                    } else {
-                        file.delete()
-                    }
-                    if (deleted && !file.exists()) {
-                        freedBytes += size
+                if (item.path.startsWith("content://")) {
+                    val docUri = android.net.Uri.parse(item.path)
+                    val deleted = android.provider.DocumentsContract.deleteDocument(context.contentResolver, docUri)
+                    if (deleted) {
+                        freedBytes += item.sizeBytes
                         deletedCount++
                         affectedCategories.add(item.category)
                     } else {
                         failedCount++
                     }
                 } else {
-                    failedCount++
+                    val file = File(item.path)
+                    // Re-verify existence and metadata before deletion
+                    if (file.exists() && file.canWrite()) {
+                        val size = if (file.isDirectory) 0L else file.length()
+                        val deleted = if (file.isDirectory) {
+                            file.deleteRecursively()
+                        } else {
+                            file.delete()
+                        }
+                        if (deleted && !file.exists()) {
+                            freedBytes += size
+                            deletedCount++
+                            affectedCategories.add(item.category)
+                        } else {
+                            failedCount++
+                        }
+                    } else {
+                        failedCount++
+                    }
                 }
             } catch (_: Exception) {
                 failedCount++

@@ -24,6 +24,14 @@ sealed class MetricResult<out T> {
     data class Error(val message: String) : MetricResult<Nothing>()
 }
 
+enum class ZRamState {
+    CURRENTLY_IN_USE,
+    ACTIVE,
+    CONFIGURED,
+    DETECTED,
+    RESTRICTED_OR_UNAVAILABLE
+}
+
 data class RamInfo(
     val totalBytes: Long,
     val availableBytes: Long,
@@ -40,7 +48,8 @@ data class RamInfo(
     val zRamUsageString: String,
     val zRamCapacityBytes: Long = 0L,
     val swapSourceType: String,
-    val swapSupportStatus: String
+    val swapSupportStatus: String,
+    val zRamState: ZRamState = ZRamState.RESTRICTED_OR_UNAVAILABLE
 )
 
 data class StorageInfo(
@@ -80,7 +89,9 @@ data class BatteryInfo(
     val powerSource: String,
     val technology: String,
     val thermalStatus: String,
-    val isOverheating: Boolean
+    val isOverheating: Boolean,
+    val isCpuThrottling: Boolean = false,
+    val thermalStatusLevel: Int = 0
 )
 
 data class DisplayInfo(
@@ -222,6 +233,15 @@ class HardwareMonitor(private val context: Context) {
             zramUsageStr = "No active swap detected"
         }
 
+        val swapUsedBytes = if (swapTotal > 0L) (swapTotal - swapFree).coerceAtLeast(0L) else 0L
+        val zRamKernelState = when {
+            swapTotal > 0L && swapUsedBytes > 0L && (zramActiveInSwaps || swapSource.contains("zRAM", ignoreCase = true)) -> ZRamState.CURRENTLY_IN_USE
+            swapTotal > 0L && (zramActiveInSwaps || swapSource.contains("zRAM", ignoreCase = true)) -> ZRamState.ACTIVE
+            zramConfiguredBytes > 0L -> ZRamState.CONFIGURED
+            zramAccessible || File("/sys/block/zram0").exists() || File("/dev/block/zram0").exists() -> ZRamState.DETECTED
+            else -> ZRamState.RESTRICTED_OR_UNAVAILABLE
+        }
+
         return RamInfo(
             totalBytes = total,
             availableBytes = avail,
@@ -238,7 +258,8 @@ class HardwareMonitor(private val context: Context) {
             zRamUsageString = zramUsageStr,
             zRamCapacityBytes = if (zramActiveInSwaps && swapTotal > 0L) swapTotal else zramConfiguredBytes,
             swapSourceType = swapSource,
-            swapSupportStatus = swapStatus
+            swapSupportStatus = swapStatus,
+            zRamState = zRamKernelState
         )
     }
 
@@ -461,8 +482,12 @@ class HardwareMonitor(private val context: Context) {
         val tech = intent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Li-ion"
 
         var thermalStatusStr = "Nominal (Cool)"
+        var thermalStatusLevel = 0
+        var isCpuThrottling = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && powerManager != null) {
-            thermalStatusStr = when (powerManager.currentThermalStatus) {
+            thermalStatusLevel = powerManager.currentThermalStatus
+            isCpuThrottling = thermalStatusLevel >= PowerManager.THERMAL_STATUS_MODERATE
+            thermalStatusStr = when (thermalStatusLevel) {
                 PowerManager.THERMAL_STATUS_NONE -> "Nominal (Cool)"
                 PowerManager.THERMAL_STATUS_LIGHT -> "Light Warmth"
                 PowerManager.THERMAL_STATUS_MODERATE -> "Moderate Throttling"
@@ -474,7 +499,7 @@ class HardwareMonitor(private val context: Context) {
             }
         }
 
-        val overheating = tempCelsius > 42.0f || healthInt == BatteryManager.BATTERY_HEALTH_OVERHEAT
+        val overheating = tempCelsius > 41.0f || healthInt == BatteryManager.BATTERY_HEALTH_OVERHEAT
 
         return BatteryInfo(
             isAvailable = true,
@@ -486,7 +511,9 @@ class HardwareMonitor(private val context: Context) {
             powerSource = powerSource,
             technology = tech,
             thermalStatus = thermalStatusStr,
-            isOverheating = overheating
+            isOverheating = overheating,
+            isCpuThrottling = isCpuThrottling,
+            thermalStatusLevel = thermalStatusLevel
         )
     }
 

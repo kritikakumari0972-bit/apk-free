@@ -82,13 +82,81 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         database.gamingSessionDao()
     )
 
-    // Hardware Telemetry States with lightweight initial safe defaults (probed asynchronously)
-    val ramInfo = MutableStateFlow(hardwareMonitor.getRamInfo())
-    val storageInfo = MutableStateFlow(hardwareMonitor.getStorageInfo())
-    val batteryInfo = MutableStateFlow(hardwareMonitor.getBatteryInfo())
-    val displayInfo = MutableStateFlow(hardwareMonitor.getDisplayInfo())
-    val networkStatus = MutableStateFlow(hardwareMonitor.getNetworkStatus())
-    val networkDetails = MutableStateFlow(networkDiagnostics.getNetworkDetails())
+    // Hardware Telemetry States with lightweight initial safe defaults (probed asynchronously without blocking Main Thread)
+    val ramInfo = MutableStateFlow(
+        RamInfo(
+            totalBytes = 0L,
+            availableBytes = 0L,
+            usedBytes = 0L,
+            usagePercentage = 0,
+            isPhysicalRamAvailable = false,
+            isLowMemory = false,
+            thresholdBytes = 0L,
+            processUsedBytes = 0L,
+            cachedBytes = 0L,
+            swapTotalBytes = 0L,
+            swapFreeBytes = 0L,
+            zRamAccessible = false,
+            zRamUsageString = "Detecting...",
+            zRamCapacityBytes = 0L,
+            swapSourceType = "Probing...",
+            swapSupportStatus = "Detecting...",
+            zRamState = com.example.core.hardware.ZRamState.RESTRICTED_OR_UNAVAILABLE
+        )
+    )
+    val storageInfo = MutableStateFlow(
+        StorageInfo(
+            totalBytes = 0L,
+            availableBytes = 0L,
+            usedBytes = 0L,
+            usagePercentage = 0,
+            path = "/storage/emulated/0"
+        )
+    )
+    val batteryInfo = MutableStateFlow(
+        BatteryInfo(
+            isAvailable = false,
+            levelPercent = 0,
+            temperatureCelsius = 0f,
+            voltageMv = 0,
+            status = "Probing...",
+            health = "Probing...",
+            powerSource = "Detecting...",
+            technology = "Li-ion",
+            thermalStatus = "Nominal",
+            isOverheating = false,
+            isCpuThrottling = false,
+            thermalStatusLevel = 0
+        )
+    )
+    val displayInfo = MutableStateFlow(
+        DisplayInfo(
+            resolution = "Probing...",
+            densityDpi = 0,
+            refreshRateHz = 60f
+        )
+    )
+    val networkStatus = MutableStateFlow(
+        NetworkStatusInfo(
+            isConnected = false,
+            transportType = "Probing...",
+            isVpnActive = false,
+            downstreamBandwidthKbps = 0
+        )
+    )
+    val networkDetails = MutableStateFlow(
+        com.example.core.network.NetworkDetails(
+            connectionType = "Probing...",
+            isConnected = false,
+            isInternetValidated = false,
+            isVpnActive = false,
+            wifiLinkSpeedMbps = 0,
+            wifiFrequencyMhz = 0,
+            wifiRssiDbm = -100,
+            downstreamKbps = 0,
+            upstreamKbps = 0
+        )
+    )
 
     // Initial safe states for heavy probes
     val cpuInfo = MutableStateFlow(
@@ -122,12 +190,8 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
     )
 
     // Dynamic Health Score & History
-    val healthScore = MutableStateFlow(
-        computeLiveHealthScore(ramInfo.value, storageInfo.value, batteryInfo.value)
-    )
-    val ramUsageHistory = MutableStateFlow<List<Float>>(
-        listOf((ramInfo.value.usagePercentage.toFloat()).coerceAtLeast(10f))
-    )
+    val healthScore = MutableStateFlow(100)
+    val ramUsageHistory = MutableStateFlow<List<Float>>(listOf(15f))
 
     // Telemetry Refresh Job
     private var telemetryJob: Job? = null
@@ -210,8 +274,8 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             initializationStatus.value = "Probing CPU architecture & GPU..."
             val cpu = hardwareMonitor.getCpuInfo()
             val gpu = GpuProbe.probeGpu(context)
-
-            initializationStatus.value = "Initializing network & diagnostics..."
+            val disp = hardwareMonitor.getDisplayInfo()
+            val netStatus = hardwareMonitor.getNetworkStatus()
             val net = networkDiagnostics.getNetworkDetails()
 
             withContext(Dispatchers.Main) {
@@ -220,8 +284,11 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
                 batteryInfo.value = bat
                 cpuInfo.value = cpu
                 gpuDiagnostics.value = gpu
+                displayInfo.value = disp
+                networkStatus.value = netStatus
                 networkDetails.value = net
                 healthScore.value = computeLiveHealthScore(ram, storage, bat)
+                ramUsageHistory.value = listOf(ram.usagePercentage.toFloat().coerceAtLeast(10f))
                 initializationStatus.value = "System Subsystems Active"
                 isAppInitialized.value = true
             }
@@ -266,7 +333,8 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
         telemetryJob = viewModelScope.launch(Dispatchers.Default) {
             while (isActive) {
                 refreshHardwareTelemetry()
-                delay(3000L)
+                val intervalSec = autoRefreshSec.value.coerceIn(1, 60)
+                delay(intervalSec * 1000L)
             }
         }
     }
@@ -317,6 +385,27 @@ class NovaMainViewModel(application: Application) : AndroidViewModel(application
             // CRITICAL REQUIREMENT: Default selection must be EMPTY (no auto-selection)
             selectedCleanItemIds.value = emptySet()
             isCleaningScanning.value = false
+        }
+    }
+
+    fun scanCustomSafFolder(treeUri: android.net.Uri) {
+        viewModelScope.launch {
+            isCleaningScanning.value = true
+            try {
+                val customGroup = storageCleaner.scanSafTree(treeUri)
+                val currentGroups = cleanScanResult.value?.groups ?: emptyList()
+                val updatedGroups = currentGroups.filter { it.category != customGroup.category } + customGroup
+                val totalBytes = updatedGroups.sumOf { it.totalBytes }
+                val totalFiles = updatedGroups.sumOf { it.items.size }
+                cleanScanResult.value = CleanScanResult(
+                    groups = updatedGroups,
+                    totalBytesFound = totalBytes,
+                    totalFilesFound = totalFiles,
+                    scanDurationMs = 200L
+                )
+            } catch (_: Exception) {} finally {
+                isCleaningScanning.value = false
+            }
         }
     }
 
